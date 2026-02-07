@@ -1,5 +1,8 @@
 from tkinter import *
 from tkinter import ttk
+from tkinter.scrolledtext import ScrolledText
+
+from views.data_frame_view import data_frame_view
 
 
 class MainView(ttk.Frame):
@@ -7,15 +10,16 @@ class MainView(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
+        self.images = {}
         self._create_widgets()
 
     def _create_widgets(self):
-        logo = PhotoImage( file="static/img/snowman-alt_24.png" )
+        self.images["logo"] = PhotoImage( file="static/img/snowman-alt_24.png" )
         title_label = ttk.Label(
             self,
             text="Herzlich willkommen!",
             font=("Verdana", 16, "bold"),
-            image=logo,
+            image=self.images["logo"],
             compound="left",
             # borderwidth=5,
             # relief="groove",
@@ -26,8 +30,8 @@ class MainView(ttk.Frame):
 
         main_frame = ttk.Frame(
             self,
-            borderwidth=1,
-            relief=SOLID,
+            # borderwidth=1,
+            # relief=SOLID,
             padding=[8, 10]
         )
 
@@ -40,33 +44,36 @@ class MainView(ttk.Frame):
             fill=BOTH
         )
 
-        tab_frame1 = ttk.Frame( notebook )
-        tab_frame2 = ttk.Frame( notebook )
+        tab_data_frame = ttk.Frame( notebook )
+        tab_calculate_frame = ttk.Frame( notebook )
 
-        tab_frame1.pack(
+        tab_data_frame.pack(
             fill=BOTH,
             expand=True
         )
-        tab_frame2.pack(
+        tab_calculate_frame.pack(
             fill=BOTH,
             expand=True
         )
 
-        tab1_logo = PhotoImage( file="static/img/cloud-sun.png" )
-        tab2_logo = PhotoImage( file="static/img/snowflake.png" )
+        self.images["tab1_logo"] = PhotoImage( file="static/img/cloud-sun.png" )
+        self.images["tab2_logo"] = PhotoImage( file="static/img/snowflake.png" )
 
         notebook.add(
-            tab_frame1,
+            tab_data_frame,
             text="Исходные данные",
-            image=tab1_logo,
+            image=self.images["tab1_logo"],
             compound=LEFT
         )
         notebook.add(
-            tab_frame2,
+            tab_calculate_frame,
             text="Расчёты",
-            image=tab2_logo,
+            image=self.images["tab2_logo"],
             compound=RIGHT
         )
+
+        tab_data = data_frame_view(tab_data_frame)
+        tab_data.create_tab()
 
         main_frame.pack(
             anchor=NW,
