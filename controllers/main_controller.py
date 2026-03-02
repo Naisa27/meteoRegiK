@@ -1,5 +1,7 @@
 from tkinter.constants import BOTH
 
+from data.database import DatabaseManager
+
 
 class MainController:
 
@@ -8,7 +10,7 @@ class MainController:
         self.current_view = None
 
         # Инициализация моделей и сервисов
-        # ...
+
 
         # self.show_main_view()
 

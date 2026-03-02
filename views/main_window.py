@@ -1,8 +1,6 @@
 from tkinter import *
 from tkinter import ttk
-from tkinter.scrolledtext import ScrolledText
-
-from views.data_frame_view import data_frame_view
+from views.main_notebook_view import MainNotebook
 
 
 class MainView(ttk.Frame):
@@ -35,45 +33,12 @@ class MainView(ttk.Frame):
             padding=[8, 10]
         )
 
-        notebook = ttk.Notebook(
-            main_frame,
-            height=200
-        )
-        notebook.pack(
-            expand=True,
-            fill=BOTH
-        )
+        main_notebook = MainNotebook(main_frame)
+        main_notebook.create()
 
-        tab_data_frame = ttk.Frame( notebook )
-        tab_calculate_frame = ttk.Frame( notebook )
 
-        tab_data_frame.pack(
-            fill=BOTH,
-            expand=True
-        )
-        tab_calculate_frame.pack(
-            fill=BOTH,
-            expand=True
-        )
-
-        self.images["tab1_logo"] = PhotoImage( file="static/img/cloud-sun.png" )
-        self.images["tab2_logo"] = PhotoImage( file="static/img/snowflake.png" )
-
-        notebook.add(
-            tab_data_frame,
-            text="Исходные данные",
-            image=self.images["tab1_logo"],
-            compound=LEFT
-        )
-        notebook.add(
-            tab_calculate_frame,
-            text="Расчёты",
-            image=self.images["tab2_logo"],
-            compound=RIGHT
-        )
-
-        tab_data = data_frame_view(tab_data_frame)
-        tab_data.create_tab()
+        # print( f'{ notebook.winfo_class()= }')
+        print( ttk.Style().theme_names() )
 
         main_frame.pack(
             anchor=NW,
