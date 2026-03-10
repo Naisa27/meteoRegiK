@@ -1,6 +1,6 @@
 from tkinter.constants import BOTH
 
-from data.database import DatabaseManager
+from data.database import Database
 
 
 class MainController:

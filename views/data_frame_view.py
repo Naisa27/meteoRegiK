@@ -1,8 +1,9 @@
 import os
+import threading
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
 
-from data.database import db_manager
+from data.data_import import data_import
 
 
 class DataFrameView:
@@ -10,6 +11,8 @@ class DataFrameView:
         self.frame = frame
         self._file_label = None
         self._data_formats_label = None
+        self._progress_bar_label = None
+        self.progress_bar = None
         self._filepath = None
         self.combobox = None
         self.load_button = None
@@ -22,6 +25,10 @@ class DataFrameView:
         self.frame.grid_rowconfigure( index=3, weight=1 )
         self.frame.grid_rowconfigure( index=4, weight=1 )
         self.frame.grid_rowconfigure( index=5, weight=1 )
+        self.frame.grid_rowconfigure( index=6, weight=1 )
+        self.frame.grid_rowconfigure( index=7, weight=1 )
+        self.frame.grid_rowconfigure( index=8, weight=1 )
+        self.frame.grid_rowconfigure( index=9, weight=1 )
         self.frame.grid_columnconfigure( index=0, weight=1 )
         self.frame.grid_columnconfigure( index=1, weight=1 )
 
@@ -106,6 +113,27 @@ class DataFrameView:
         )
         print( f'{ self.combobox.winfo_class()= }' )
 
+        self._progress_bar_label = ttk.Label(
+            self.frame,
+            text="",
+            style="File.TLabel"
+        )
+        self._progress_bar_label.grid(
+            row=5,
+            column=0,
+            sticky=W,
+            padx=10,
+            pady=10
+        )
+
+        self.progress_bar = ttk.Progressbar(
+            self.frame,
+            orient="horizontal",
+            length=300,
+            mode="determinate"
+        )
+
+
         select_button = ttk.Button(
             self.frame,
             text="Посмотреть существующие",
@@ -144,17 +172,40 @@ class DataFrameView:
             )
 
     def load_file(self) -> None:
-        print(f"Загрузка данных из {self._filepath=}")
+        self._progress_bar_label.config( text="Идёт импорт данных..." )
+        self._progress_bar_label.update_idletasks() # Принудительное обновление интерфейса
+
+        self.progress_bar.grid(
+            row=6,
+            column=0,
+            sticky=W,
+            padx=10,
+            pady=10
+        )
+        self.progress_bar.config( maximum=100 )
+
         if not self._filepath:
             messagebox.showerror( "Ошибка", "Выберите файл для импорта" )
+            return
 
+        # Запуск в потоке, чтобы GUI не завис
+        thread = threading.Thread( target=self.task, daemon=True )
+        thread.start()
+
+
+    def task(self) -> None:
         data_format = self.data_format_var.get()
-        tablename = f"tSourceData_{data_format}"
-
-        db_manager.import_from_excel(
+        result = data_import.import_from_excel(
             filepath=self._filepath,
-            data_format=data_format
+            data_format=data_format,
+            progress_callback=self.update_progress
         )
+        self.frame.after( 0, lambda: print( "Готово:", result ) )
+        self._progress_bar_label.config( text="Готово" )
+
+    def update_progress( self, current, total ):
+        self.frame.after( 0, lambda: self.progress_bar.config( value=(current / total * 100) ) )
+
 
     def _on_format_selected( self, event=None ):
         selected_format = self.combobox.get()

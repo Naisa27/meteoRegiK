@@ -1,6 +1,5 @@
 # import tkinter as tk
 from tkinter import *
-from tkinter.messagebox import showinfo, showwarning, showerror, askyesno
 
 from controllers.main_controller import MainController
 
@@ -12,12 +11,15 @@ rp5 заливается
 
 надо сделать заливку rgm
 
+надо сделать проверку на повторы, чтобы уже залитые данные заново не заливались.
+
 '''
 
 
 def main():
     root = Tk()
     icon = PhotoImage( file="static/img/cloud-sun.png" )
+    # icon = PhotoImage( file="static/img/snowflake.png" )
     root.iconphoto( False, icon)
     root.title( "MeteoRegiK" )
     root.geometry( "800x600" )
