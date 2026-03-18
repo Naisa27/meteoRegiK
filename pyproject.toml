@@ -10,6 +10,95 @@ dependencies = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "pydantic-settings-aws>=0.1.2",
+    "ruff>=0.15.5",
     "sqlalchemy>=2.0.48",
     "xlrd>=2.0.2",
 ]
+
+# ============================================================
+# RUFF CONFIGURATION
+# ============================================================
+
+[tool.ruff]
+# Максимальная длина строки
+line-length = 88
+
+# Целевая версия Python (у вас 3.13)
+target-version = "py313"
+
+# Исключить из проверки
+exclude = [
+    ".git",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    ".venv",
+]
+
+# Исходный код (для isort)
+#src = ["src", "."]
+
+[tool.ruff.lint]
+# Включить правила
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "I",    # isort (сортировка импортов)
+    "N",    # pep8-naming
+    "W",    # pycodestyle warnings
+    "UP",   # pyupgrade (современный синтаксис Python)
+    "B",    # flake8-bugbear (распространённые ошибки)
+    "C4",   # flake8-comprehensions (генераторы списков)
+    "SIM",  # flake8-simplify (упрощение кода)
+    "TCH",  # flake8-type-checking (оптимизация импортов типов)
+    "RUF",  # Ruff-specific rules
+]
+
+# Исключить правила
+ignore = [
+    "E501",   # line too long (длинные строки в GUI)
+    "N802",   # function name should be lowercase (tkinter callbacks часто используют camelCase)
+    "N803",   # argument name should be lowercase
+    "N806",   # variable in function should be lowercase
+    "N815",   # mixedCase variable in class scope (tkinter style)
+    "B008",   # do not perform function calls in argument defaults
+    "SIM108", # use ternary operator (иногда менее читаемо)
+    "RUF001", #проверяет неоднозначные Unicode-символы в строках
+    "RUF002",
+    "RUF003",
+    "N818",
+]
+
+# Правила для конкретных файлов
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]           # unused imports в init файлах
+"tests/*" = ["S101", "D"]          # assert и docstrings в тестах
+"ui/*" = ["N802", "N803", "N806"]  # tkinter naming conventions в UI файлах
+
+# Настройка isort (сортировка импортов)
+[tool.ruff.lint.isort]
+known-first-party = ["meteoregik-v3"]  # Ваш пакет
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+# Настройка naming (имена переменных)
+[tool.ruff.lint.pep8-naming]
+# Tkinter часто использует camelCase для методов
+classmethod-decorators = ["classmethod", "pydantic.validator"]
+
+# ============================================================
+# RUFF FORMAT CONFIGURATION
+# ============================================================
+
+[tool.ruff.format]
+# Стиль кавычек
+quote-style = "double"
+
+# Отступы
+indent-style = "space"
+
+# Скобки
+skip-magic-trailing-comma = false
+
+# Docstring форматирование
+docstring-code-format = true
+docstring-code-line-length = "dynamic"

@@ -1,4 +1,4 @@
-from repositories.rp5 import Rp5Repository, Rp5FindDoubleRepository
+from repositories.rp5 import Rp5FindDoubleRepository, Rp5Repository
 
 
 class DBManager:
@@ -6,6 +6,7 @@ class DBManager:
     Контекстный менеджер для работы с сессией
 
     """
+
     def __init__(self, session_factory):
         self.session_factory = session_factory
 
@@ -22,14 +23,14 @@ class DBManager:
         self.session.rollback()
         self.session.close()
 
-    def commit( self ):
+    def commit(self):
         """Коммит транзакции"""
         self.session.commit()
 
-    def rollback( self ):
+    def rollback(self):
         """Откат транзакции"""
         self.session.rollback()
 
-    def close( self ):
+    def close(self):
         """Закрытие сессии"""
         self.session.close()

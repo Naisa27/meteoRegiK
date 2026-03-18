@@ -1,5 +1,5 @@
 class MeteoregikException(Exception):
-    detail ="неожиданная ошибка"
+    detail = "неожиданная ошибка"
 
     def __init__(self, *args, **kwargs):
         super().__init__(self.detail, *args, **kwargs)
@@ -14,9 +14,8 @@ class ObjectNotFoundException(MeteoregikException):
 
 
 class NotAddInDBException(MeteoregikException):
-    detail="Не удалось добавить методом add объект в базу данных"
+    detail = "Не удалось добавить методом add объект в базу данных"
 
 
 class NotBulkAddInDBException(MeteoregikException):
-    detail="Не удалось добавить методом bulk_add список объектов в базу данных"
-
+    detail = "Не удалось добавить методом bulk_add список объектов в базу данных"

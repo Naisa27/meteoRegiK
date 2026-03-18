@@ -2,10 +2,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-class SourceDataRp5Base(BaseModel):
-    """ Базовая схема данных   """
 
-    station_name: str = Field( ... )
+class SourceDataRp5Base(BaseModel):
+    """Базовая схема данных"""
+
+    station_name: str = Field(...)
     date: str = Field(...)
     dt: datetime | None = None
     time_point: int | None = Field(None, ge=0, le=23)
@@ -44,22 +45,22 @@ class SourceDataRp5Add(SourceDataRp5Base):
 
 
 class SourceDataRp5(SourceDataRp5Base):
-    """ Полная схема данных """
-    id: int
-    created_at: datetime = Field( ... )
-    updated_at: datetime | None = None
-    isActive: bool = Field( ... )
+    """Полная схема данных"""
 
-    model_config = ConfigDict( from_attributes=True )
+    id: int
+    created_at: datetime = Field(...)
+    updated_at: datetime | None = None
+    isActive: bool = Field(...)
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SourceDataRp5FindDouble(BaseModel):
-    station_name: str = Field( ... )
-    dt: datetime = Field( ... )
-    time_point: int = Field( ... )
+    station_name: str = Field(...)
+    dt: datetime = Field(...)
+    time_point: int = Field(...)
 
-    model_config = ConfigDict( from_attributes=True )
+    model_config = ConfigDict(from_attributes=True)
 
     def __str__(self):
         return f"{self.__dict__}"
-
