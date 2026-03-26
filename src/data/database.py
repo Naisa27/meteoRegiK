@@ -1,8 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from config import settings
-from data.db_base import Base
+from src.config import settings
+from src.data.db_base import Base
 
 
 class Database:

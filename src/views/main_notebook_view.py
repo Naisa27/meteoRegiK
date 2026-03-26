@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
 
-from views.data_frame_view import DataFrameView
-from views.notebook_view import Notebook
+from src.views.data_frame_view import DataFrameView
+from src.views.notebook_view import Notebook
 
 
 class MainNotebook:
@@ -31,8 +31,8 @@ class MainNotebook:
             background=[("selected", "#ffffff")],
         )
 
-        self.images["tab1_logo"] = tk.PhotoImage(file="static/img/cloud-sun.png")
-        self.images["tab2_logo"] = tk.PhotoImage(file="static/img/snowflake.png")
+        self.images["tab1_logo"] = tk.PhotoImage(file="src/static/img/cloud-sun.png")
+        self.images["tab2_logo"] = tk.PhotoImage(file="src/static/img/snowflake.png")
 
         notebook = Notebook(self.master, style="Flat.TNotebook")
         notebook.pack(fill="both", expand=True)

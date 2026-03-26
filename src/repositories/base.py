@@ -2,13 +2,13 @@ from pydantic import BaseModel
 from sqlalchemy import insert, select
 from sqlalchemy.exc import NoResultFound
 
-from exceptions.exceptions import (
+from src.exceptions.exceptions import (
     DatabaseException,
     NotAddInDBException,
     NotBulkAddInDBException,
     ObjectNotFoundException,
 )
-from repositories.mappers.base import DataMapper
+from src.repositories.mappers.base import DataMapper
 
 
 class BaseRepository:

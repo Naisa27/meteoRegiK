@@ -4,10 +4,10 @@ from typing import Any
 
 import pandas as pd
 
-from data.database import Database
-from data.db_manager import DBManager
-from schemas.import_result import ImportResult
-from schemas.source_data_rp5 import SourceDataRp5Add
+from src.data.database import Database
+from src.data.db_manager import DBManager
+from src.schemas.import_result import ImportResult
+from src.schemas.source_data_rp5 import SourceDataRp5Add
 
 
 class DataImport(Database):

@@ -18,7 +18,9 @@ class Settings(BaseSettings):
         db_path = Path(self.DB_DIR) / self.DB_NAME
         return f"sqlite:///{db_path}"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).parent.parent / ".env", extra="ignore"
+    )
 
     def get_export_path(self, filename: str) -> Path:
         """

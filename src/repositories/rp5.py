@@ -1,6 +1,6 @@
-from data.models.source_data_rp5 import SourceDataRp5Orm
-from repositories.base import BaseRepository
-from repositories.mappers.mappers import (
+from src.data.models.source_data_rp5 import SourceDataRp5Orm
+from src.repositories.base import BaseRepository
+from src.repositories.mappers.mappers import (
     SourceDataRp5DataMapper,
     SourceDataRp5FindDoubleDataMapper,
 )

@@ -11,7 +11,7 @@ class MainController:
         # self.show_main_view()
 
     def show_main_view(self):
-        from views.main_window import MainView
+        from src.views.main_window import MainView
 
         self._switch_view(MainView)
 

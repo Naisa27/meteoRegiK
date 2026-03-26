@@ -1,4 +1,4 @@
-from repositories.rp5 import Rp5FindDoubleRepository, Rp5Repository
+from src.repositories.rp5 import Rp5FindDoubleRepository, Rp5Repository
 
 
 class DBManager:

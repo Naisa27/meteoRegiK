@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from views.main_notebook_view import MainNotebook
+from src.views.main_notebook_view import MainNotebook
 
 
 class MainView(ttk.Frame):
@@ -12,7 +12,7 @@ class MainView(ttk.Frame):
         self._create_widgets()
 
     def _create_widgets(self):
-        self.images["logo"] = tk.PhotoImage(file="static/img/snowman-alt_24.png")
+        self.images["logo"] = tk.PhotoImage(file="src/static/img/snowman-alt_24.png")
         title_label = ttk.Label(
             self,
             text="Herzlich willkommen!",

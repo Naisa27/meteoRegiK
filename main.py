@@ -1,6 +1,6 @@
 import tkinter as tk
 
-from controllers.main_controller import MainController
+from src.controllers.main_controller import MainController
 
 # Диалоговые окна   следующий
 
@@ -16,7 +16,7 @@ rp5 заливается
 
 def main():
     root = tk.Tk()
-    icon = tk.PhotoImage(file="static/img/cloud-sun.png")
+    icon = tk.PhotoImage(file="src/static/img/cloud-sun.png")
     # icon = PhotoImage( file="static/img/snowflake.png" )
     root.iconphoto(False, icon)
     root.title("MeteoRegiK")

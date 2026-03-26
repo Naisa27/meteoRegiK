@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Float, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from data.db_base import Base
+from src.data.db_base import Base
 
 
 class SourceDataRp5Orm(Base):

@@ -3,7 +3,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from data.data_import import data_import
+from src.data.data_import import data_import
 
 
 class DataFrameView:
