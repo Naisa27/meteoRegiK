@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
-
-from meteoregik.resources import LOGO_PATH
-
-LOGO_HEIGHT = 40
 
 
 class MainWindow(QMainWindow):
@@ -42,20 +37,12 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(10)
 
-        logo = QLabel()
-        pixmap = QPixmap(str(LOGO_PATH))
-        if not pixmap.isNull():
-            logo.setPixmap(
-                pixmap.scaledToHeight(LOGO_HEIGHT, Qt.TransformationMode.SmoothTransformation)
-            )
-
         title = QLabel("meteoRegiK")
         font = title.font()
         font.setPointSize(font.pointSize() + 4)
         font.setBold(True)
         title.setFont(font)
 
-        row.addWidget(logo)
         row.addWidget(title)
         row.addStretch(1)
         return header
