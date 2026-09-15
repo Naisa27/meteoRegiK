@@ -1,0 +1,3 @@
+# Справочные/примерные Excel-файлы — тяжёлые, не нужны в git
+.claude/docs/*.xlsx
+.claude/docs/*.xls
