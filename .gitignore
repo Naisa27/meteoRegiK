@@ -1,3 +1,18 @@
 # Справочные/примерные Excel-файлы — тяжёлые, не нужны в git
 .claude/docs/*.xlsx
 .claude/docs/*.xls
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+
+# Локальная рабочая БД (не сид-справочники — их место решается отдельно,
+# см. "Открытые вопросы для доработки" в .claude/docs/plan.md)
+/meteoregik.sqlite3
+/meteoregik.sqlite3-wal
+/meteoregik.sqlite3-shm

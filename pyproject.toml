@@ -1,0 +1,33 @@
+[project]
+name = "meteoregik"
+version = "0.1.0"
+description = "Десктопное приложение для работы с агрометеорологическими данными: импорт из Excel (rp5/ГГ), статистика, просмотр/редактирование, карта, дашборд, экспорт"
+authors = [
+    { name = "Naisa", email = "naisa@mail.ru" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "folium>=0.20.0",
+    "matplotlib>=3.11.2",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.5",
+    "pyside6>=6.11.2",
+    "sqlalchemy>=2.0.53",
+    "xlrd>=2.0.2",
+]
+
+[project.scripts]
+meteoregik = "meteoregik.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+    "pytest>=9.1.1",
+]
