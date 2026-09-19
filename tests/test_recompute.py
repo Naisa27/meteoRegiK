@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import date, time
 
 from sqlalchemy import select
 
 from meteoregik.calculations.recompute import recompute_range
 from meteoregik.db.migrations import run_migrations
-from meteoregik.db.schema import computed_indicators, gg_readings, stations
+from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings, stations
 from meteoregik.db.session import get_engine
 
 WMO_INDEX = 27704
@@ -127,3 +127,134 @@ def test_recompute_range_calls_progress_callback_for_each_day(tmp_path):
     )
 
     assert seen_dates == [date(2020, 1, 1), date(2020, 1, 2), date(2020, 1, 3)]
+
+
+def test_recompute_range_detects_conflict_between_rp5_and_gg(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            rp5_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21), obs_time=time(0, 0),
+                T_temperature=-2.5, source_file="Сухиничи_2015-2019_rp5.xls",
+            )
+        )
+    recompute_range(engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21))
+    assert _get(engine, WMO_INDEX, "day", date(2015, 1, 21), date(2015, 1, 21), "avg") == -2.5
+
+    with engine.begin() as conn:
+        conn.execute(
+            gg_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21),
+                t_avg=-2.3, t_min=-2.3, t_max=-2.3,
+                source_file="Сухиничи 1959-2025_формат_ГГ.xlsx",
+            )
+        )
+
+    seen_conflicts = []
+
+    def resolver(conflict):
+        seen_conflicts.append(conflict)
+        return "old"  # оставляем значение из rp5
+
+    recompute_range(engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21), conflict_resolver=resolver)
+
+    assert len(seen_conflicts) == 3  # avg/min/max — у одиночного rp5-срока все три равны -2.5
+    conflict = seen_conflicts[0]
+    assert conflict.old_value == -2.5
+    assert conflict.old_source_file == "Сухиничи_2015-2019_rp5.xls"
+    assert conflict.new_value == -2.3
+    assert conflict.new_source_file == "Сухиничи 1959-2025_формат_ГГ.xlsx"
+
+    # выбор "old" — сохранённое значение не изменилось
+    assert _get(engine, WMO_INDEX, "day", date(2015, 1, 21), date(2015, 1, 21), "avg") == -2.5
+
+
+def test_recompute_range_conflict_choosing_new_overwrites(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            rp5_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21), obs_time=time(0, 0), T_temperature=-2.5
+            )
+        )
+    recompute_range(engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21))
+
+    with engine.begin() as conn:
+        conn.execute(
+            gg_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21), t_avg=-2.3, t_min=-2.3, t_max=-2.3
+            )
+        )
+
+    recompute_range(
+        engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21),
+        conflict_resolver=lambda conflict: "new",
+    )
+
+    assert _get(engine, WMO_INDEX, "day", date(2015, 1, 21), date(2015, 1, 21), "avg") == -2.3
+
+
+def test_recompute_range_without_resolver_keeps_previous_behaviour(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            rp5_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21), obs_time=time(0, 0), T_temperature=-2.5
+            )
+        )
+    recompute_range(engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21))
+
+    with engine.begin() as conn:
+        conn.execute(
+            gg_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2015, 1, 21), t_avg=-2.3, t_min=-2.3, t_max=-2.3
+            )
+        )
+
+    recompute_range(engine, WMO_INDEX, date(2015, 1, 21), date(2015, 1, 21))  # без conflict_resolver
+
+    assert _get(engine, WMO_INDEX, "day", date(2015, 1, 21), date(2015, 1, 21), "avg") == -2.3
+
+
+def test_decade_aggregation_reads_stored_day_values_not_raw_recompute(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    # День 5 января "заморожен" в computed_indicators значением, не
+    # соответствующим никаким сырым данным (их для этой даты вообще нет) —
+    # имитирует ранее сделанный пользователем выбор при конфликте.
+    with engine.begin() as conn:
+        conn.execute(
+            computed_indicators.insert(),
+            [
+                {"wmo_index": WMO_INDEX, "period_type": "day", "period_start": date(2020, 1, 5),
+                 "period_end": date(2020, 1, 5), "parameter": "T", "stat_type": "avg", "value": 99.0},
+                {"wmo_index": WMO_INDEX, "period_type": "day", "period_start": date(2020, 1, 5),
+                 "period_end": date(2020, 1, 5), "parameter": "T", "stat_type": "min", "value": 99.0},
+                {"wmo_index": WMO_INDEX, "period_type": "day", "period_start": date(2020, 1, 5),
+                 "period_end": date(2020, 1, 5), "parameter": "T", "stat_type": "max", "value": 99.0},
+            ],
+        )
+        conn.execute(
+            gg_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2020, 1, 6), t_avg=1.0, t_min=1.0, t_max=1.0
+            )
+        )
+
+    # Пересчитываем только 6 января — 5-е января day-циклом не затрагивается.
+    recompute_range(engine, WMO_INDEX, date(2020, 1, 6), date(2020, 1, 6))
+
+    # Но декада (1-10 января) пересчитывается целиком и должна учесть
+    # "замороженное" значение 5 января как есть (99.0), а не проигнорировать
+    # его из-за отсутствия сырых данных.
+    assert _get(engine, WMO_INDEX, "decade", date(2020, 1, 1), date(2020, 1, 10), "avg") == 50.0

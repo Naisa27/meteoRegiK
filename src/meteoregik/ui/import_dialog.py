@@ -8,12 +8,20 @@ calculations/recompute.py для станции и периода, затрон�
 правил (см. plan.md). Пересчёт — самая долгая часть (день за днём по всему
 периоду файла), поэтому во время него показываются текст "Идёт пересчёт",
 текущая обрабатываемая дата и полоса прогресса — recompute_range вызывает
-progress_callback(day) на каждый обработанный день."""
+progress_callback(day) на каждый обработанный день.
+
+Если пересчитанное значение расходится с уже сохранённым (например, rp5- и
+ГГ-данные за одну дату дают разный максимум температуры), recompute_range
+вызывает conflict_resolver — модальный диалог с выбором "оставить
+сохранённое" / "взять новое" (и вариантами "...для всех оставшихся", чтобы
+не переспрашивать на каждый день при массовом расхождении)."""
 
 from __future__ import annotations
 
 import time
+from typing import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -31,10 +39,33 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
-from meteoregik.calculations.recompute import recompute_range
+from meteoregik.calculations.recompute import ConflictChoice, ValueConflict, recompute_range
 from meteoregik.importers.base import ImportReport
 from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.importers.rp5_importer import Rp5Importer
+
+_PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "месяц", "year": "год"}
+_STAT_TYPE_NAMES = {"avg": "средняя", "min": "минимальная", "max": "максимальная"}
+
+
+def format_conflict_message(conflict: ValueConflict) -> str:
+    """Текст диалога расхождения значений — вынесено из ImportDialog, чтобы
+    тестировать без QApplication."""
+    period = _PERIOD_TYPE_NAMES.get(conflict.period_type, conflict.period_type)
+    stat = _STAT_TYPE_NAMES.get(conflict.stat_type, conflict.stat_type)
+    old_source = conflict.old_source_file or "неизвестный файл"
+    new_source = conflict.new_source_file or "неизвестный файл"
+    period_range = (
+        conflict.period_start.isoformat()
+        if conflict.period_start == conflict.period_end
+        else f"{conflict.period_start.isoformat()} — {conflict.period_end.isoformat()}"
+    )
+    return (
+        f"Показатель «{stat} температура», период: {period} ({period_range}).\n\n"
+        f"Сохранено (из файла «{old_source}»): {conflict.old_value}\n"
+        f"Рассчитано сейчас (из файла «{new_source}»): {conflict.new_value}\n\n"
+        "Какое значение оставить?"
+    )
 
 
 def format_import_report(report: ImportReport) -> str:
@@ -98,6 +129,11 @@ class ImportDialog(QDialog):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
+        self.success_label = QLabel("")
+        self.success_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.success_label.setStyleSheet("color: #3B7A3B; font-weight: bold;")
+        layout.addWidget(self.success_label)
+
         self.report_label = QLabel("")
         self.report_label.setWordWrap(True)
         layout.addWidget(self.report_label, stretch=1)
@@ -129,6 +165,7 @@ class ImportDialog(QDialog):
 
         self._set_controls_enabled(False)
         self.report_label.setText("")
+        self.success_label.setText("")
         self.status_label.setText("Идёт импорт…")
         QApplication.processEvents()
 
@@ -151,6 +188,7 @@ class ImportDialog(QDialog):
             self.progress_bar.setVisible(False)
 
         self.status_label.setText("")
+        self.success_label.setText("Импорт завершён успешно")
         self.report_label.setText(format_import_report(report))
 
     def _recompute_with_progress(self, report: ImportReport) -> None:
@@ -179,7 +217,44 @@ class ImportDialog(QDialog):
         recompute_range(
             self.engine, report.wmo_index, report.period_start, report.period_end,
             progress_callback=_on_progress,
+            conflict_resolver=self._make_conflict_resolver(),
         )
+
+    def _make_conflict_resolver(self) -> Callable[[ValueConflict], ConflictChoice]:
+        """Резолвер конфликтов на одно выполнение _run_import: если
+        пользователь выбрал "...для всех оставшихся", дальше отвечает без
+        повторных диалогов."""
+        remembered: dict[str, ConflictChoice] = {}
+
+        def _resolve(conflict: ValueConflict) -> ConflictChoice:
+            if "choice" in remembered:
+                return remembered["choice"]
+
+            box = QMessageBox(self)
+            box.setWindowTitle("Расхождение значений")
+            box.setText(format_conflict_message(conflict))
+            keep_old_btn = box.addButton("Оставить сохранённое", QMessageBox.ButtonRole.ActionRole)
+            keep_new_btn = box.addButton("Взять новое", QMessageBox.ButtonRole.ActionRole)
+            keep_old_all_btn = box.addButton(
+                "Оставить сохранённое для всех оставшихся", QMessageBox.ButtonRole.ActionRole
+            )
+            keep_new_all_btn = box.addButton(
+                "Взять новое для всех оставшихся", QMessageBox.ButtonRole.ActionRole
+            )
+            box.exec()
+            clicked = box.clickedButton()
+
+            if clicked is keep_old_all_btn:
+                remembered["choice"] = "old"
+                return "old"
+            if clicked is keep_new_all_btn:
+                remembered["choice"] = "new"
+                return "new"
+            if clicked is keep_new_btn:
+                return "new"
+            return "old"  # keep_old_btn или диалог закрыт без выбора
+
+        return _resolve
 
     def _resolve_station_name(self, wmo_index: int) -> str:
         name, ok = QInputDialog.getText(

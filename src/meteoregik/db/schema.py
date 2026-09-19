@@ -144,6 +144,12 @@ computed_indicators = Table(
     Column("parameter", Text, nullable=False),  # 'T', позже 'RRR' и др.
     Column("stat_type", Text, nullable=False),  # 'avg' | 'min' | 'max'
     Column("value", Float, nullable=True),
+    # Файл, давший текущее значение (для day — конкретный исходный файл
+    # rp5/ГГ; для decade/month/year — NULL, единого файла-источника у
+    # агрегата нет). Нужен calculations/recompute.py для диалога разрешения
+    # конфликтов, когда пересчёт по новым данным расходится с уже
+    # сохранённым значением (см. plan.md, правки от 2026-09-19).
+    Column("source_file", Text, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
     UniqueConstraint(
         "wmo_index", "period_type", "period_start", "period_end", "parameter", "stat_type",

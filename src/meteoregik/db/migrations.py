@@ -30,6 +30,13 @@ wmo_index=27704 в этом поле оказывалось произвольн
 На момент миграции обе таблицы гарантированно пусты (задокументировано и
 проверено вручную — единственные прогоны импортёров были в тестах/ручной
 проверке на временных БД) — таблицы пересоздаются тем же паттерном.
+
+Миграция 5 — добавлен computed_indicators.source_file (nullable): для
+day-уровня хранит имя файла, давшего текущее значение; нужен
+calculations/recompute.py для диалога разрешения конфликтов между
+источниками с разными значениями на одну и ту же дату (rp5 vs ГГ), см.
+правки пользователя от 2026-09-19. computed_indicators на момент миграции
+пуста — пересоздаётся тем же паттерном.
 """
 
 from __future__ import annotations
@@ -39,7 +46,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.db.schema import computed_indicators, gg_readings, metadata, rp5_readings, schema_version
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def run_migrations(engine: Engine) -> None:
@@ -61,6 +68,8 @@ def run_migrations(engine: Engine) -> None:
                 _migrate_to_3(conn)
             if version < 4:
                 _migrate_to_4(conn)
+            if version < 5:
+                _migrate_to_5(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -86,3 +95,7 @@ def _migrate_to_3(conn: Connection) -> None:
 def _migrate_to_4(conn: Connection) -> None:
     _recreate_if_empty(conn, gg_readings, "Миграция 4")
     _recreate_if_empty(conn, computed_indicators, "Миграция 4")
+
+
+def _migrate_to_5(conn: Connection) -> None:
+    _recreate_if_empty(conn, computed_indicators, "Миграция 5")

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
 
+from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
 
 
@@ -26,10 +26,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_header())
-
-        placeholder = QLabel("meteoRegiK — экраны появятся здесь")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(placeholder, stretch=1)
+        layout.addWidget(GreetingWidget(), stretch=1)
 
         self.setCentralWidget(central)
 
