@@ -258,3 +258,23 @@ def test_decade_aggregation_reads_stored_day_values_not_raw_recompute(tmp_path):
     # "замороженное" значение 5 января как есть (99.0), а не проигнорировать
     # его из-за отсутствия сырых данных.
     assert _get(engine, WMO_INDEX, "decade", date(2020, 1, 1), date(2020, 1, 10), "avg") == 50.0
+
+
+def test_decade_aggregation_rounds_average_to_two_decimals(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            gg_readings.insert(),
+            [
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "t_avg": 1.0, "t_min": 1.0, "t_max": 1.0},
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 2), "t_avg": 2.0, "t_min": 2.0, "t_max": 2.0},
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 3), "t_avg": 2.0, "t_min": 2.0, "t_max": 2.0},
+            ],
+        )
+
+    recompute_range(engine, WMO_INDEX, date(2020, 1, 1), date(2020, 1, 3))
+
+    assert _get(engine, WMO_INDEX, "decade", date(2020, 1, 1), date(2020, 1, 10), "avg") == 1.67

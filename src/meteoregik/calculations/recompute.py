@@ -194,7 +194,7 @@ def _aggregate_from_stored(engine: Engine, wmo_index: int, start: date, end: dat
     mins = [row.value for row in rows if row.stat_type == "min" and row.value is not None]
     maxs = [row.value for row in rows if row.stat_type == "max" and row.value is not None]
     return {
-        "avg": sum(avgs) / len(avgs) if avgs else None,
+        "avg": round(sum(avgs) / len(avgs), 2) if avgs else None,
         "min": min(mins) if mins else None,
         "max": max(maxs) if maxs else None,
     }

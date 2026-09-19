@@ -24,6 +24,11 @@ from meteoregik.db.schema import gg_readings, rp5_readings
 Stats = dict[str, float | None]
 
 _EMPTY_STATS: Stats = {"avg": None, "min": None, "max": None}
+_ROUND_DIGITS = 2
+
+
+def _round(value: float | None) -> float | None:
+    return None if value is None else round(value, _ROUND_DIGITS)
 
 
 def decade_bounds(day: date) -> tuple[date, date]:
@@ -46,7 +51,11 @@ def daily_stats(engine: Engine, wmo_index: int, day: date) -> Stats:
             )
         ).mappings().first()
         if gg_row is not None:
-            return {"avg": gg_row["t_avg"], "min": gg_row["t_min"], "max": gg_row["t_max"]}
+            return {
+                "avg": _round(gg_row["t_avg"]),
+                "min": _round(gg_row["t_min"]),
+                "max": _round(gg_row["t_max"]),
+            }
 
         temps = conn.execute(
             select(rp5_readings.c.T_temperature).where(
@@ -57,7 +66,11 @@ def daily_stats(engine: Engine, wmo_index: int, day: date) -> Stats:
     values = [t for t in temps if t is not None]
     if not values:
         return dict(_EMPTY_STATS)
-    return {"avg": sum(values) / len(values), "min": min(values), "max": max(values)}
+    return {
+        "avg": _round(sum(values) / len(values)),
+        "min": _round(min(values)),
+        "max": _round(max(values)),
+    }
 
 
 def _aggregate_days(engine: Engine, wmo_index: int, start: date, end: date) -> Stats:
@@ -76,9 +89,9 @@ def _aggregate_days(engine: Engine, wmo_index: int, start: date, end: date) -> S
         day += timedelta(days=1)
 
     return {
-        "avg": sum(avgs) / len(avgs) if avgs else None,
-        "min": min(mins) if mins else None,
-        "max": max(maxs) if maxs else None,
+        "avg": _round(sum(avgs) / len(avgs)) if avgs else None,
+        "min": _round(min(mins)) if mins else None,
+        "max": _round(max(maxs)) if maxs else None,
     }
 
 

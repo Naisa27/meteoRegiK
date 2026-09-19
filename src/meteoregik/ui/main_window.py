@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
 
 from meteoregik.ui.greeting_widget import GreetingWidget
@@ -25,7 +25,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._build_header())
         layout.addWidget(GreetingWidget(), stretch=1)
 
         self.setCentralWidget(central)
@@ -40,22 +39,3 @@ class MainWindow(QMainWindow):
     def _open_import_dialog(self) -> None:
         dialog = ImportDialog(self.engine, self)
         dialog.exec()
-
-    def _build_header(self) -> QWidget:
-        header = QWidget()
-        header.setObjectName("header")
-        header.setStyleSheet("#header { background: #f2f2f2; border-bottom: 1px solid #d0d0d0; }")
-
-        row = QHBoxLayout(header)
-        row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(10)
-
-        title = QLabel("meteoRegiK")
-        font = title.font()
-        font.setPointSize(font.pointSize() + 4)
-        font.setBold(True)
-        title.setFont(font)
-
-        row.addWidget(title)
-        row.addStretch(1)
-        return header

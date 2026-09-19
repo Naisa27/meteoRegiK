@@ -1,11 +1,14 @@
 """Приветственный экран главного окна: заголовок, дата/день недели, живые
-часы. Занимает место прежней заглушки-плейсхолдера в MainWindow.
+часы. Занимает место прежней заглушки-плейсхолдера в MainWindow, теперь во
+всю площадь окна (верхняя шапка с "meteoRegiK" убрана) — содержимое
+выровнено к верхней части, а не по центру всего окна.
 
 Оформление — не веб-стиль, а спокойный "исследовательский" тон: засечный
 шрифт для заголовка (Constantia), нейтральные serif/sans пары, палитра в
-духе пасмурного неба и урожая (не дефолтные крем+терракота), тонкая
-барометр-иконка (static/barometr.jpg) как единственный акцент вместо
-крупного hero-изображения."""
+духе пасмурного неба и урожая (не дефолтные крем+терракота), иконка
+static/meteo_1.png (прозрачный фон) как единственный акцент вместо крупного
+hero-изображения. У всех подписей явно прозрачный фон — иначе Qt-стиль
+подсвечивает QLabel своим цветом, который отличается от фона виджета."""
 
 from __future__ import annotations
 
@@ -51,14 +54,16 @@ class GreetingWidget(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setContentsMargins(0, 48, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         layout.setSpacing(6)
 
         icon = QLabel()
+        icon.setStyleSheet("background: transparent;")
         pixmap = QPixmap(str(LOGO_PATH))
         if not pixmap.isNull():
             icon.setPixmap(
-                pixmap.scaledToWidth(64, Qt.TransformationMode.SmoothTransformation)
+                pixmap.scaledToWidth(96, Qt.TransformationMode.SmoothTransformation)
             )
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon)
@@ -67,7 +72,7 @@ class GreetingWidget(QWidget):
         headline = QLabel("Добро пожаловать в meteoRegiK")
         headline_font = QFont("Constantia", 21)
         headline.setFont(headline_font)
-        headline.setStyleSheet(f"color: {_TEXT_PRIMARY};")
+        headline.setStyleSheet(f"color: {_TEXT_PRIMARY}; background: transparent;")
         headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(headline)
 
@@ -76,7 +81,7 @@ class GreetingWidget(QWidget):
             "импорт, расчёты и карта станций."
         )
         subtitle.setFont(QFont("Segoe UI", 11))
-        subtitle.setStyleSheet(f"color: {_TEXT_SECONDARY};")
+        subtitle.setStyleSheet(f"color: {_TEXT_SECONDARY}; background: transparent;")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
@@ -84,7 +89,7 @@ class GreetingWidget(QWidget):
 
         self._date_label = QLabel()
         self._date_label.setFont(QFont("Segoe UI", 12))
-        self._date_label.setStyleSheet(f"color: {_TEXT_SECONDARY};")
+        self._date_label.setStyleSheet(f"color: {_TEXT_SECONDARY}; background: transparent;")
         self._date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._date_label)
 
@@ -92,9 +97,11 @@ class GreetingWidget(QWidget):
         clock_font = QFont("Segoe UI", 30)
         clock_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
         self._clock_label.setFont(clock_font)
-        self._clock_label.setStyleSheet(f"color: {_ACCENT};")
+        self._clock_label.setStyleSheet(f"color: {_ACCENT}; background: transparent;")
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._clock_label)
+
+        layout.addStretch(1)
 
     def _tick(self) -> None:
         now = datetime.now()

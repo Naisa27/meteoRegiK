@@ -46,6 +46,25 @@ def test_daily_stats_from_rp5_averages_available_slots(tmp_path):
     assert stats == {"avg": 1.0, "min": -2.0, "max": 4.0}
 
 
+def test_daily_stats_rounds_average_to_two_decimals(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            rp5_readings.insert(),
+            [
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "obs_time": time(0, 0), "T_temperature": 1.0},
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "obs_time": time(6, 0), "T_temperature": 2.0},
+                {"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "obs_time": time(12, 0), "T_temperature": 2.0},
+            ],
+        )
+
+    stats = daily_stats(engine, WMO_INDEX, date(2020, 1, 1))
+    assert stats["avg"] == 1.67  # 5/3 = 1.6666... -> округлено до 2 знаков
+
+
 def test_daily_stats_prefers_gg_over_rp5(tmp_path):
     engine = get_engine(tmp_path / "test.sqlite3")
     run_migrations(engine)
