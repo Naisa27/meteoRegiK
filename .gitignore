@@ -11,8 +11,9 @@ build/
 dist/
 *.egg-info/
 
-# Локальная рабочая БД (не сид-справочники — их место решается отдельно,
-# см. "Открытые вопросы для доработки" в .claude/docs/plan.md)
+# Локальная рабочая БД — не сид: справочники stations/ru_regions бандлятся с
+# приложением как CSV (src/meteoregik/seed_data/) и заливаются db/seed.py при
+# первом запуске, сам файл БД в git не нужен (см. plan.md).
 /meteoregik.sqlite3
 /meteoregik.sqlite3-wal
 /meteoregik.sqlite3-shm
