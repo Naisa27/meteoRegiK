@@ -56,7 +56,12 @@ ru_regions = Table(
 
 # Стандартный набор параметров rp5.ru (имя колонки = столбец в файле + суффикс
 # параметра в одно слово). Точный состав конкретного файла может отличаться —
-# см. "Открытые вопросы для доработки" в plan.md.
+# сопоставление в rp5_importer.py идёт по имени столбца, не по позиции.
+# Зафиксировано по факту разбора .claude/docs/Мосальск_2005-2025_rp5.xls
+# (см. plan.md): добавлен ff3 (порыв ветра между сроками, отсутствовал в
+# первоначальной раскладке); RRR/VV/sss переведены из Float в Text — реальные
+# выгрузки rp5.ru кладут туда текстовые значения ("Осадков нет", "Следы
+# осадков" и т.п.) наравне с числами.
 RP5_PARAMETER_COLUMNS: list[tuple[str, type]] = [
     ("T_temperature", Float),
     ("Po_pressure_station", Float),
@@ -66,6 +71,7 @@ RP5_PARAMETER_COLUMNS: list[tuple[str, type]] = [
     ("DD_wind_direction", Text),
     ("Ff_wind_speed", Float),
     ("ff10_wind_gust", Float),
+    ("ff3_wind_gust", Float),
     ("N_cloudiness_total", Text),
     ("WW_weather_present", Text),
     ("W1_weather_past1", Text),
@@ -77,14 +83,14 @@ RP5_PARAMETER_COLUMNS: list[tuple[str, type]] = [
     ("H_cloud_base_height", Text),
     ("Cm_clouds_mid", Text),
     ("Ch_clouds_high", Text),
-    ("VV_visibility", Float),
+    ("VV_visibility", Text),
     ("Td_dewpoint", Float),
-    ("RRR_precipitation", Float),
+    ("RRR_precipitation", Text),
     ("tR_precipitation_period", Float),
     ("E_soil_state", Text),
     ("Tg_soil_temp_min", Float),
     ("E2_soil_state_snow", Text),
-    ("sss_snow_depth", Float),
+    ("sss_snow_depth", Text),
 ]
 
 rp5_readings = Table(
