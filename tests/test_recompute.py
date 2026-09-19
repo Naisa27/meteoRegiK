@@ -278,3 +278,30 @@ def test_decade_aggregation_rounds_average_to_two_decimals(tmp_path):
     recompute_range(engine, WMO_INDEX, date(2020, 1, 1), date(2020, 1, 3))
 
     assert _get(engine, WMO_INDEX, "decade", date(2020, 1, 1), date(2020, 1, 10), "avg") == 1.67
+
+
+def test_recompute_range_deletes_stale_value_when_no_raw_data_left(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    _make_station(engine)
+
+    with engine.begin() as conn:
+        conn.execute(
+            gg_readings.insert().values(
+                wmo_index=WMO_INDEX, obs_date=date(2020, 1, 1), t_avg=5.0, t_min=0.0, t_max=10.0
+            )
+        )
+    recompute_range(engine, WMO_INDEX, date(2020, 1, 1), date(2020, 1, 1))
+    assert _get(engine, WMO_INDEX, "day", date(2020, 1, 1), date(2020, 1, 1), "avg") == 5.0
+
+    # Пользователь удалил единственную запись за день (например, через
+    # "Просмотр данных") — сырых данных для этой даты больше нет вообще.
+    with engine.begin() as conn:
+        conn.execute(gg_readings.delete().where(gg_readings.c.wmo_index == WMO_INDEX))
+    recompute_range(engine, WMO_INDEX, date(2020, 1, 1), date(2020, 1, 1))
+
+    # computed_indicators — производный кэш: без сырых данных значение не
+    # должно "зависать" со старым числом, а должно исчезнуть.
+    assert _get(engine, WMO_INDEX, "day", date(2020, 1, 1), date(2020, 1, 1), "avg") is None
+    assert _get(engine, WMO_INDEX, "day", date(2020, 1, 1), date(2020, 1, 1), "min") is None
+    assert _get(engine, WMO_INDEX, "day", date(2020, 1, 1), date(2020, 1, 1), "max") is None

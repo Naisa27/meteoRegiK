@@ -11,9 +11,12 @@ static/meteo_1.png (прозрачный фон) как единственный
 hero-изображения. У всех подписей явно прозрачный фон — иначе Qt-стиль
 подсвечивает QLabel своим цветом, который отличается от фона виджета.
 
-Виджет не знает про ImportDialog/engine напрямую (чисто декоративный экран) —
-при клике на кнопку испускает import_requested, MainWindow сам решает, что
-делать."""
+Виджет не знает про ImportDialog/DataBrowserDialog/engine напрямую (чисто
+декоративный экран) — при клике на кнопки испускает import_requested /
+data_browser_requested, MainWindow сам решает, что делать. Обе кнопки на
+одной строке под часами — "Импорт данных" (акцент — урожайное золото) и
+"Просмотр данных" (второй акцент — пасмурно-небесный синий, та же пара
+цветов, что в theme.py)."""
 
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
-from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from meteoregik.resources import LOGO_PATH
 from meteoregik.ui import theme
@@ -49,6 +52,7 @@ def _format_date_ru(now: datetime) -> str:
 
 class GreetingWidget(QWidget):
     import_requested = Signal()
+    data_browser_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -111,11 +115,23 @@ class GreetingWidget(QWidget):
 
         layout.addSpacing(32)
 
+        button_row = QHBoxLayout()
+        button_row.setSpacing(16)
+
         import_btn = QPushButton("Импорт данных")
         import_btn.setStyleSheet(theme.PRIMARY_BUTTON_QSS)
         import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         import_btn.clicked.connect(self.import_requested.emit)
-        layout.addWidget(import_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        button_row.addWidget(import_btn)
+
+        data_browser_btn = QPushButton("Просмотр данных")
+        data_browser_btn.setStyleSheet(theme.SKY_BUTTON_QSS)
+        data_browser_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        data_browser_btn.clicked.connect(self.data_browser_requested.emit)
+        button_row.addWidget(data_browser_btn)
+
+        layout.addLayout(button_row)
+        layout.setAlignment(button_row, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(1)
 

@@ -20,31 +20,44 @@ from __future__ import annotations
 BG = "#F6F8FA"
 TEXT_PRIMARY = "#26333A"
 TEXT_SECONDARY = "#5B6B74"
-ACCENT = "#B8862E"
+ACCENT = "#B8862E"  # урожайное золото — основное действие (импорт данных)
 ACCENT_HOVER = "#A6761F"
 ACCENT_DISABLED = "#DDCBA6"
+# Второй акцент — пасмурно-небесный синий, пара к "урожайному золоту" в той
+# же агрометеорологической палитре (солнце/урожай vs небо/влага), не просто
+# случайный "второй цвет". Используется для действий, отличных от основного
+# ("Просмотр данных" рядом с "Импорт данных" — см. правки 2026-09-19).
+ACCENT_SKY = "#3E6B87"
+ACCENT_SKY_HOVER = "#325571"
+ACCENT_SKY_DISABLED = "#A9BEC9"
 BORDER = "#D7DEE3"
 INPUT_BG = "#FFFFFF"
 INPUT_BG_READONLY = "#EEF2F4"
 SUCCESS = "#3B7A3B"
 
-PRIMARY_BUTTON_QSS = f"""
+
+def _filled_button_qss(base: str, hover: str, disabled: str) -> str:
+    return f"""
 QPushButton {{
     border-radius: 8px;
     padding: 10px 28px;
-    background-color: {ACCENT};
+    background-color: {base};
     color: #FFFFFF;
     border: none;
     font-weight: 600;
 }}
 QPushButton:hover {{
-    background-color: {ACCENT_HOVER};
+    background-color: {hover};
 }}
 QPushButton:disabled {{
-    background-color: {ACCENT_DISABLED};
+    background-color: {disabled};
     color: #FFFFFF;
 }}
 """
+
+
+PRIMARY_BUTTON_QSS = _filled_button_qss(ACCENT, ACCENT_HOVER, ACCENT_DISABLED)
+SKY_BUTTON_QSS = _filled_button_qss(ACCENT_SKY, ACCENT_SKY_HOVER, ACCENT_SKY_DISABLED)
 
 DIALOG_QSS = f"""
 QDialog {{

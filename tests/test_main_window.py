@@ -30,3 +30,17 @@ def test_import_button_under_greeting_opens_import_dialog():
 
     mock_dialog_cls.assert_called_once_with(engine, window)
     mock_dialog_cls.return_value.exec.assert_called_once()
+
+
+def test_data_browser_button_opens_data_browser_dialog():
+    _qapp()
+    engine = get_engine(":memory:")
+    window = MainWindow(engine)
+
+    with patch("meteoregik.ui.main_window.DataBrowserDialog") as mock_dialog_cls:
+        buttons = window.centralWidget().findChildren(QPushButton)
+        data_browser_btn = next(b for b in buttons if "Просмотр" in b.text())
+        data_browser_btn.click()
+
+    mock_dialog_cls.assert_called_once_with(engine, window)
+    mock_dialog_cls.return_value.exec.assert_called_once()

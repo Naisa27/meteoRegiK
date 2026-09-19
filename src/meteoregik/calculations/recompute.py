@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Callable, Literal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
@@ -128,6 +128,21 @@ def _write(
     conn.execute(stmt)
 
 
+def _delete_stat(
+    conn: Connection, wmo_index: int, period_type: str, period_start: date, period_end: date, stat_type: str
+) -> None:
+    conn.execute(
+        delete(computed_indicators).where(
+            computed_indicators.c.wmo_index == wmo_index,
+            computed_indicators.c.period_type == period_type,
+            computed_indicators.c.period_start == period_start,
+            computed_indicators.c.period_end == period_end,
+            computed_indicators.c.parameter == PARAMETER,
+            computed_indicators.c.stat_type == stat_type,
+        )
+    )
+
+
 def _resolve_and_store(
     engine: Engine,
     wmo_index: int,
@@ -147,9 +162,16 @@ def _resolve_and_store(
             old_value = old["value"] if old else None
 
             if new_value is None:
-                if old is None:
-                    continue  # нечего сохранять и нечего сравнивать
-                continue  # новых данных для пересчёта нет — сохранённое не трогаем
+                if old is not None:
+                    # computed_indicators — производный кэш, а не хранилище
+                    # истины: если по станции/периоду больше нет вообще
+                    # никаких сырых данных (ни ГГ, ни rp5 — daily_stats уже
+                    # проверил оба источника), сохранённое значение стало
+                    # осиротевшим и должно исчезнуть вместе с данными
+                    # (например, пользователь удалил единственную запись за
+                    # день через "Просмотр данных").
+                    _delete_stat(conn, wmo_index, period_type, period_start, period_end, stat_type)
+                continue
 
             if old is None or old_value is None or abs(old_value - new_value) <= _EPSILON:
                 _write(conn, wmo_index, period_type, period_start, period_end, stat_type, new_value, new_source_file)

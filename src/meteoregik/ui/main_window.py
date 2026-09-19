@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
 
+from meteoregik.ui.data_browser import DataBrowserDialog
 from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
 
@@ -12,8 +13,9 @@ class MainWindow(QMainWindow):
     дашборд, карта, экспорт, справочник станций) подключаются по мере
     реализации — см. раздел "Экраны UI" в .claude/docs/plan.md.
 
-    Без верхнего меню — единственное действие пока (импорт данных) доступно
-    кнопкой на приветственном экране (см. GreetingWidget.import_requested)."""
+    Без верхнего меню — действия (импорт, просмотр данных) доступны кнопками
+    на приветственном экране (см. GreetingWidget.import_requested /
+    .data_browser_requested)."""
 
     def __init__(self, engine: Engine) -> None:
         super().__init__()
@@ -28,10 +30,15 @@ class MainWindow(QMainWindow):
 
         greeting = GreetingWidget()
         greeting.import_requested.connect(self._open_import_dialog)
+        greeting.data_browser_requested.connect(self._open_data_browser)
         layout.addWidget(greeting, stretch=1)
 
         self.setCentralWidget(central)
 
     def _open_import_dialog(self) -> None:
         dialog = ImportDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_data_browser(self) -> None:
+        dialog = DataBrowserDialog(self.engine, self)
         dialog.exec()
