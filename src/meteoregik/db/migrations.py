@@ -14,6 +14,12 @@ rp5_readings нигде не заполнялась (rp5_importer.py ещё не
 Для будущих миграций, затрагивающих таблицы с данными, использовать явный
 DDL, а не текущую metadata (иначе миграция "поплывёт" вместе с дальнейшими
 изменениями schema.py).
+
+Миграция 3 — добавлен UniqueConstraint на computed_indicators
+(station_id, period_type, period_start, period_end, parameter, stat_type),
+нужный calculations/recompute.py для атомарного upsert (INSERT ... ON
+CONFLICT). До этой миграции computed_indicators нигде не заполнялась —
+таблица пересоздаётся тем же паттерном, что и в миграции 2.
 """
 
 from __future__ import annotations
@@ -21,9 +27,9 @@ from __future__ import annotations
 from sqlalchemy import inspect, select
 from sqlalchemy.engine import Connection, Engine
 
-from meteoregik.db.schema import metadata, rp5_readings, schema_version
+from meteoregik.db.schema import computed_indicators, metadata, rp5_readings, schema_version
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def run_migrations(engine: Engine) -> None:
@@ -41,15 +47,25 @@ def run_migrations(engine: Engine) -> None:
         with engine.begin() as conn:
             if version < 2:
                 _migrate_to_2(conn)
+            if version < 3:
+                _migrate_to_3(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
-def _migrate_to_2(conn: Connection) -> None:
-    has_rows = conn.execute(select(rp5_readings.c.id).limit(1)).first() is not None
+def _recreate_if_empty(conn: Connection, table, migration_label: str) -> None:
+    has_rows = conn.execute(select(table.c.id).limit(1)).first() is not None
     if has_rows:
         raise RuntimeError(
-            "Миграция 2 пересоздаёт rp5_readings и ожидает пустую таблицу, "
+            f"{migration_label} пересоздаёт {table.name} и ожидает пустую таблицу, "
             "но в ней уже есть данные — нужна миграция с сохранением данных"
         )
-    rp5_readings.drop(conn, checkfirst=True)
-    rp5_readings.create(conn)
+    table.drop(conn, checkfirst=True)
+    table.create(conn)
+
+
+def _migrate_to_2(conn: Connection) -> None:
+    _recreate_if_empty(conn, rp5_readings, "Миграция 2")
+
+
+def _migrate_to_3(conn: Connection) -> None:
+    _recreate_if_empty(conn, computed_indicators, "Миграция 3")

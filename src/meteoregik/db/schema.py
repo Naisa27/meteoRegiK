@@ -141,4 +141,8 @@ computed_indicators = Table(
     Column("stat_type", Text, nullable=False),  # 'avg' | 'min' | 'max'
     Column("value", Float, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    UniqueConstraint(
+        "station_id", "period_type", "period_start", "period_end", "parameter", "stat_type",
+        name="uq_computed_indicators_key",
+    ),
 )
