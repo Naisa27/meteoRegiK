@@ -14,8 +14,12 @@ from datetime import date
 
 @dataclass(frozen=True)
 class ImportReport:
-    """Отчёт по итогам импорта — выводится пользователю на экране "Импорт"."""
+    """Отчёт по итогам импорта — выводится пользователю на экране "Импорт".
 
+    station_id нужен вызывающему коду (UI), чтобы после успешного импорта
+    запустить calculations/recompute.py для затронутого диапазона."""
+
+    station_id: int | None
     station_name: str | None
     period_start: date | None
     period_end: date | None

@@ -47,6 +47,7 @@ def test_import_file_creates_station_via_name_resolver(tmp_path):
         rows = conn.execute(select(gg_readings).order_by(gg_readings.c.obs_date)).mappings().all()
 
     assert station["name"] == "Станция 27707"
+    assert report.station_id == station["id"]
     assert rows[0]["t_avg"] == 24.2
     assert rows[0]["rrr_precipitation"] == 0.0
     assert rows[0]["station_name"] == "Станция 27707"

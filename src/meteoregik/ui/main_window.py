@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
+
+from meteoregik.ui.import_dialog import ImportDialog
 
 
 class MainWindow(QMainWindow):
@@ -16,6 +19,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("meteoRegiK")
         self.resize(1100, 750)
 
+        self._build_menu()
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -27,6 +32,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(placeholder, stretch=1)
 
         self.setCentralWidget(central)
+
+    def _build_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("Файл")
+
+        import_action = QAction("Импорт данных…", self)
+        import_action.triggered.connect(self._open_import_dialog)
+        file_menu.addAction(import_action)
+
+    def _open_import_dialog(self) -> None:
+        dialog = ImportDialog(self.engine, self)
+        dialog.exec()
 
     def _build_header(self) -> QWidget:
         header = QWidget()

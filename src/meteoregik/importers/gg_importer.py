@@ -71,7 +71,7 @@ class GgImporter(Importer):
             )
 
         if not parsed_rows:
-            return ImportReport(None, None, None, 0, 0, 0)
+            return ImportReport(None, None, None, None, 0, 0, 0)
 
         period_start = min(r["obs_date"] for r in parsed_rows)
         period_end = max(r["obs_date"] for r in parsed_rows)
@@ -118,8 +118,10 @@ class GgImporter(Importer):
             if new_rows:
                 conn.execute(gg_readings.insert(), new_rows)
 
+        primary_station_id = station_ids[parsed_rows[0]["wmo_index"]]
         return ImportReport(
-            station_name=station_names[station_ids[parsed_rows[0]["wmo_index"]]],
+            station_id=primary_station_id,
+            station_name=station_names[primary_station_id],
             period_start=period_start,
             period_end=period_end,
             total_rows=len(parsed_rows),

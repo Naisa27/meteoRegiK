@@ -113,3 +113,17 @@ def test_recompute_range_is_idempotent_upsert(tmp_path):
     recompute_range(engine, station_id, date(2020, 1, 1), date(2020, 1, 1))
 
     assert _get(engine, station_id, "day", date(2020, 1, 1), date(2020, 1, 1), "avg") == 50.0
+
+
+def test_recompute_range_calls_progress_callback_for_each_day(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    station_id = _make_station(engine)
+
+    seen_dates = []
+    recompute_range(
+        engine, station_id, date(2020, 1, 1), date(2020, 1, 3),
+        progress_callback=seen_dates.append,
+    )
+
+    assert seen_dates == [date(2020, 1, 1), date(2020, 1, 2), date(2020, 1, 3)]

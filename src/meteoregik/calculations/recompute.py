@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date, timedelta
+from typing import Callable
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
@@ -79,10 +80,21 @@ def _months_in_range(start: date, end: date) -> list[tuple[int, int]]:
     return months
 
 
-def recompute_range(engine: Engine, station_id: int, start: date, end: date) -> None:
+def recompute_range(
+    engine: Engine,
+    station_id: int,
+    start: date,
+    end: date,
+    progress_callback: Callable[[date], None] | None = None,
+) -> None:
+    """progress_callback(day), если передан, вызывается после пересчёта
+    каждого дня диапазона — вызывающий код (UI) использует его, чтобы
+    показать текущую дату и обновить полосу прогресса."""
     day = start
     while day <= end:
         _store(engine, station_id, "day", day, day, daily_stats(engine, station_id, day))
+        if progress_callback is not None:
+            progress_callback(day)
         day += timedelta(days=1)
 
     for decade_start, decade_end in _decades_in_range(start, end):
