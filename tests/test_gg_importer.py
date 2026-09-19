@@ -47,8 +47,9 @@ def test_import_file_creates_station_via_name_resolver(tmp_path):
         rows = conn.execute(select(gg_readings).order_by(gg_readings.c.obs_date)).mappings().all()
 
     assert station["name"] == "Станция 27707"
-    assert report.station_id == station["id"]
+    assert report.wmo_index == 27707
     assert rows[0]["t_avg"] == 24.2
+    assert rows[0]["wmo_index"] == 27707
     assert rows[0]["rrr_precipitation"] == 0.0
     assert rows[0]["station_name"] == "Станция 27707"
     assert rows[1]["rrr_precipitation"] is None
@@ -59,9 +60,7 @@ def test_import_file_reuses_existing_station_by_wmo_index(tmp_path):
     run_migrations(engine)
 
     with engine.begin() as conn:
-        existing_id = conn.execute(
-            stations.insert().values(name="Сухиничи", wmo_index=27707)
-        ).inserted_primary_key[0]
+        conn.execute(stations.insert().values(name="Сухиничи", wmo_index=27707))
 
     file_path = _write_gg_xlsx(
         tmp_path / "gg.xlsx",
@@ -76,7 +75,7 @@ def test_import_file_reuses_existing_station_by_wmo_index(tmp_path):
         row = conn.execute(select(gg_readings)).mappings().one()
 
     assert n_stations == 1
-    assert row["station_id"] == existing_id
+    assert row["wmo_index"] == 27707
 
 
 def test_import_file_without_name_resolver_raises_when_station_missing(tmp_path):

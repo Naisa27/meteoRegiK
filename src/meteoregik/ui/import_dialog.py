@@ -68,9 +68,9 @@ class ImportDialog(QDialog):
         self.file_edit = QLineEdit()
         self.file_edit.setReadOnly(True)
         file_row.addWidget(self.file_edit, stretch=1)
-        browse_btn = QPushButton("Обзор…")
-        browse_btn.clicked.connect(self._browse_file)
-        file_row.addWidget(browse_btn)
+        self.browse_btn = QPushButton("Обзор…")
+        self.browse_btn.clicked.connect(self._browse_file)
+        file_row.addWidget(self.browse_btn)
         layout.addLayout(file_row)
 
         format_row = QHBoxLayout()
@@ -102,9 +102,17 @@ class ImportDialog(QDialog):
         self.report_label.setWordWrap(True)
         layout.addWidget(self.report_label, stretch=1)
 
-        close_btn = QPushButton("Закрыть")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        self.close_btn = QPushButton("Закрыть")
+        self.close_btn.clicked.connect(self.accept)
+        layout.addWidget(self.close_btn)
+
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        """Пока идёт импорт/пересчёт — недоступны выбор файла, запуск
+        импорта и закрытие диалога (не должно быть возможности прервать
+        операцию на середине)."""
+        self.browse_btn.setEnabled(enabled)
+        self.import_btn.setEnabled(enabled)
+        self.close_btn.setEnabled(enabled)
 
     def _browse_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -119,7 +127,7 @@ class ImportDialog(QDialog):
             QMessageBox.warning(self, "Импорт", "Сначала выберите файл")
             return
 
-        self.import_btn.setEnabled(False)
+        self._set_controls_enabled(False)
         self.report_label.setText("")
         self.status_label.setText("Идёт импорт…")
         QApplication.processEvents()
@@ -131,14 +139,14 @@ class ImportDialog(QDialog):
                 importer = GgImporter(self.engine, name_resolver=self._resolve_station_name)
             report = importer.import_file(file_path)
 
-            if report.imported_rows > 0 and report.station_id is not None:
+            if report.imported_rows > 0 and report.wmo_index is not None:
                 self._recompute_with_progress(report)
         except Exception as exc:  # noqa: BLE001 — показываем пользователю любую ошибку импорта
             self.status_label.setText("")
             QMessageBox.critical(self, "Ошибка импорта", str(exc))
             return
         finally:
-            self.import_btn.setEnabled(True)
+            self._set_controls_enabled(True)
             self.date_label.setText("")
             self.progress_bar.setVisible(False)
 
@@ -169,7 +177,7 @@ class ImportDialog(QDialog):
                 last_ui_update = now
 
         recompute_range(
-            self.engine, report.station_id, report.period_start, report.period_end,
+            self.engine, report.wmo_index, report.period_start, report.period_end,
             progress_callback=_on_progress,
         )
 

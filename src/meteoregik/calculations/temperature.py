@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from meteoregik.db.schema import gg_readings, rp5_readings, stations
+from meteoregik.db.schema import gg_readings, rp5_readings
 
 Stats = dict[str, float | None]
 
@@ -36,23 +36,17 @@ def decade_bounds(day: date) -> tuple[date, date]:
     return date(day.year, day.month, 21), date(day.year, day.month, last_day)
 
 
-def daily_stats(engine: Engine, station_id: int, day: date) -> Stats:
+def daily_stats(engine: Engine, wmo_index: int, day: date) -> Stats:
     """avg/min/max температуры за сутки по доступным срокам rp5 (или напрямую
     из gg_readings, если источник — ГГ)."""
     with engine.connect() as conn:
         gg_row = conn.execute(
             select(gg_readings.c.t_avg, gg_readings.c.t_min, gg_readings.c.t_max).where(
-                gg_readings.c.station_id == station_id, gg_readings.c.obs_date == day
+                gg_readings.c.wmo_index == wmo_index, gg_readings.c.obs_date == day
             )
         ).mappings().first()
         if gg_row is not None:
             return {"avg": gg_row["t_avg"], "min": gg_row["t_min"], "max": gg_row["t_max"]}
-
-        wmo_index = conn.execute(
-            select(stations.c.wmo_index).where(stations.c.id == station_id)
-        ).scalar_one_or_none()
-        if wmo_index is None:
-            return dict(_EMPTY_STATS)
 
         temps = conn.execute(
             select(rp5_readings.c.T_temperature).where(
@@ -66,13 +60,13 @@ def daily_stats(engine: Engine, station_id: int, day: date) -> Stats:
     return {"avg": sum(values) / len(values), "min": min(values), "max": max(values)}
 
 
-def _aggregate_days(engine: Engine, station_id: int, start: date, end: date) -> Stats:
+def _aggregate_days(engine: Engine, wmo_index: int, start: date, end: date) -> Stats:
     avgs: list[float] = []
     mins: list[float] = []
     maxs: list[float] = []
     day = start
     while day <= end:
-        stats = daily_stats(engine, station_id, day)
+        stats = daily_stats(engine, wmo_index, day)
         if stats["avg"] is not None:
             avgs.append(stats["avg"])
         if stats["min"] is not None:
@@ -88,15 +82,15 @@ def _aggregate_days(engine: Engine, station_id: int, start: date, end: date) -> 
     }
 
 
-def decade_stats(engine: Engine, station_id: int, decade_start: date, decade_end: date) -> Stats:
-    return _aggregate_days(engine, station_id, decade_start, decade_end)
+def decade_stats(engine: Engine, wmo_index: int, decade_start: date, decade_end: date) -> Stats:
+    return _aggregate_days(engine, wmo_index, decade_start, decade_end)
 
 
-def month_stats(engine: Engine, station_id: int, year: int, month: int) -> Stats:
+def month_stats(engine: Engine, wmo_index: int, year: int, month: int) -> Stats:
     start = date(year, month, 1)
     end = date(year, month, monthrange(year, month)[1])
-    return _aggregate_days(engine, station_id, start, end)
+    return _aggregate_days(engine, wmo_index, start, end)
 
 
-def year_stats(engine: Engine, station_id: int, year: int) -> Stats:
-    return _aggregate_days(engine, station_id, date(year, 1, 1), date(year, 12, 31))
+def year_stats(engine: Engine, wmo_index: int, year: int) -> Stats:
+    return _aggregate_days(engine, wmo_index, date(year, 1, 1), date(year, 12, 31))

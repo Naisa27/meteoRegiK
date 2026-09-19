@@ -116,13 +116,13 @@ class Rp5Importer(Importer):
             parsed_rows.append(row)
 
         if not parsed_rows:
-            return ImportReport(None, station_name, None, None, 0, 0, 0)
+            return ImportReport(wmo_index, station_name, None, None, 0, 0, 0)
 
         period_start = min(r["obs_date"] for r in parsed_rows)
         period_end = max(r["obs_date"] for r in parsed_rows)
 
         with self.engine.begin() as conn:
-            station_id = find_or_create_station(conn, wmo_index, name=station_name)
+            find_or_create_station(conn, wmo_index, name=station_name)
 
             existing_keys = set(
                 conn.execute(
@@ -140,7 +140,7 @@ class Rp5Importer(Importer):
                 conn.execute(rp5_readings.insert(), new_rows)
 
         return ImportReport(
-            station_id=station_id,
+            wmo_index=wmo_index,
             station_name=station_name,
             period_start=period_start,
             period_end=period_end,

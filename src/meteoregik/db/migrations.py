@@ -20,6 +20,16 @@ DDL, а не текущую metadata (иначе миграция "поплыв�
 нужный calculations/recompute.py для атомарного upsert (INSERT ... ON
 CONFLICT). До этой миграции computed_indicators нигде не заполнялась —
 таблица пересоздаётся тем же паттерном, что и в миграции 2.
+
+Миграция 4 — station_id (FK на автоинкрементный PK stations.id) в
+gg_readings и computed_indicators переименован в wmo_index (без FK, тем же
+паттерном, что и rp5_readings): FK-значение — внутренний PK, не имеющий
+смысла при прямом просмотре сырых данных (например, у станции с
+wmo_index=27704 в этом поле оказывалось произвольное число вроде 958) —
+путаница обнаружена пользователем при проверке экрана "Импорт" 2026-09-19.
+На момент миграции обе таблицы гарантированно пусты (задокументировано и
+проверено вручную — единственные прогоны импортёров были в тестах/ручной
+проверке на временных БД) — таблицы пересоздаются тем же паттерном.
 """
 
 from __future__ import annotations
@@ -27,9 +37,9 @@ from __future__ import annotations
 from sqlalchemy import inspect, select
 from sqlalchemy.engine import Connection, Engine
 
-from meteoregik.db.schema import computed_indicators, metadata, rp5_readings, schema_version
+from meteoregik.db.schema import computed_indicators, gg_readings, metadata, rp5_readings, schema_version
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def run_migrations(engine: Engine) -> None:
@@ -49,6 +59,8 @@ def run_migrations(engine: Engine) -> None:
                 _migrate_to_2(conn)
             if version < 3:
                 _migrate_to_3(conn)
+            if version < 4:
+                _migrate_to_4(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -69,3 +81,8 @@ def _migrate_to_2(conn: Connection) -> None:
 
 def _migrate_to_3(conn: Connection) -> None:
     _recreate_if_empty(conn, computed_indicators, "Миграция 3")
+
+
+def _migrate_to_4(conn: Connection) -> None:
+    _recreate_if_empty(conn, gg_readings, "Миграция 4")
+    _recreate_if_empty(conn, computed_indicators, "Миграция 4")

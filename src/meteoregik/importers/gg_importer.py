@@ -1,10 +1,11 @@
 """Импортёр формата ГГ (среднесуточные показатели) -> gg_readings.
 
 Источник: "Индекс ВМО, Год, Месяц, День, Tavg, Tmax, RRR, Tmin". В файле нет
-названия станции — matching.find_or_create_station(wmo_index) возвращает
-station_id (создаёт новую станцию и запрашивает у пользователя название, если
-не найдена); station_name резолвится через stations.name по station_id и
-кэшируется в gg_readings вместе со station_id.
+названия станции — matching.find_or_create_station(wmo_index) гарантирует,
+что запись в stations существует (создаёт новую станцию и запрашивает у
+пользователя название, если не найдена); gg_readings хранит wmo_index
+напрямую (без FK на stations.id — см. plan.md, п.11 решений), station_name
+резолвится через stations.name по wmo_index и кэшируется для читаемости.
 
 Запрос имени для новой станции — через опциональный callback name_resolver
 (wmo_index -> name), который передаёт вызывающий код (UI: экран "Импорт").
@@ -31,11 +32,11 @@ def _clean(value: object) -> object | None:
     return None if pd.isna(value) else value
 
 
-def _resolve_station(
+def _ensure_station(
     conn: Connection, wmo_index: int, name_resolver: Callable[[int], str] | None
-) -> int:
+) -> None:
     try:
-        return find_or_create_station(conn, wmo_index)
+        find_or_create_station(conn, wmo_index)
     except ValueError:
         if name_resolver is None:
             raise ValueError(
@@ -43,7 +44,7 @@ def _resolve_station(
                 "нужно имя для создания новой записи (name_resolver не передан)"
             ) from None
         name = name_resolver(wmo_index)
-        return find_or_create_station(conn, wmo_index, name=name)
+        find_or_create_station(conn, wmo_index, name=name)
 
 
 class GgImporter(Importer):
@@ -77,19 +78,17 @@ class GgImporter(Importer):
         period_end = max(r["obs_date"] for r in parsed_rows)
 
         with self.engine.begin() as conn:
-            station_ids: dict[int, int] = {}
             station_names: dict[int, str] = {}
             for wmo_index in {r["wmo_index"] for r in parsed_rows}:
-                station_id = _resolve_station(conn, wmo_index, self.name_resolver)
-                station_ids[wmo_index] = station_id
-                station_names[station_id] = conn.execute(
-                    select(stations.c.name).where(stations.c.id == station_id)
+                _ensure_station(conn, wmo_index, self.name_resolver)
+                station_names[wmo_index] = conn.execute(
+                    select(stations.c.name).where(stations.c.wmo_index == wmo_index)
                 ).scalar_one()
 
             rows_to_insert = [
                 {
-                    "station_id": station_ids[r["wmo_index"]],
-                    "station_name": station_names[station_ids[r["wmo_index"]]],
+                    "wmo_index": r["wmo_index"],
+                    "station_name": station_names[r["wmo_index"]],
                     "obs_date": r["obs_date"],
                     "t_avg": r["t_avg"],
                     "t_min": r["t_min"],
@@ -100,11 +99,11 @@ class GgImporter(Importer):
                 for r in parsed_rows
             ]
 
-            touched_station_ids = set(station_ids.values())
+            touched_wmo_indexes = {r["wmo_index"] for r in parsed_rows}
             existing_keys = set(
                 conn.execute(
-                    select(gg_readings.c.station_id, gg_readings.c.obs_date).where(
-                        gg_readings.c.station_id.in_(touched_station_ids)
+                    select(gg_readings.c.wmo_index, gg_readings.c.obs_date).where(
+                        gg_readings.c.wmo_index.in_(touched_wmo_indexes)
                     )
                 ).all()
             )
@@ -112,16 +111,16 @@ class GgImporter(Importer):
             new_rows = [
                 row
                 for row in rows_to_insert
-                if (row["station_id"], row["obs_date"]) not in existing_keys
+                if (row["wmo_index"], row["obs_date"]) not in existing_keys
             ]
 
             if new_rows:
                 conn.execute(gg_readings.insert(), new_rows)
 
-        primary_station_id = station_ids[parsed_rows[0]["wmo_index"]]
+        primary_wmo_index = parsed_rows[0]["wmo_index"]
         return ImportReport(
-            station_id=primary_station_id,
-            station_name=station_names[primary_station_id],
+            wmo_index=primary_wmo_index,
+            station_name=station_names[primary_wmo_index],
             period_start=period_start,
             period_end=period_end,
             total_rows=len(parsed_rows),

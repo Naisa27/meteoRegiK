@@ -28,9 +28,9 @@ from meteoregik.db.schema import computed_indicators
 PARAMETER = "T"
 
 
-def _upsert(conn: Connection, station_id: int, period_type: str, period_start: date, period_end: date, stat_type: str, value: float | None) -> None:
+def _upsert(conn: Connection, wmo_index: int, period_type: str, period_start: date, period_end: date, stat_type: str, value: float | None) -> None:
     stmt = sqlite_insert(computed_indicators).values(
-        station_id=station_id,
+        wmo_index=wmo_index,
         period_type=period_type,
         period_start=period_start,
         period_end=period_end,
@@ -40,7 +40,7 @@ def _upsert(conn: Connection, station_id: int, period_type: str, period_start: d
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=[
-            computed_indicators.c.station_id,
+            computed_indicators.c.wmo_index,
             computed_indicators.c.period_type,
             computed_indicators.c.period_start,
             computed_indicators.c.period_end,
@@ -52,10 +52,10 @@ def _upsert(conn: Connection, station_id: int, period_type: str, period_start: d
     conn.execute(stmt)
 
 
-def _store(engine: Engine, station_id: int, period_type: str, period_start: date, period_end: date, stats: Stats) -> None:
+def _store(engine: Engine, wmo_index: int, period_type: str, period_start: date, period_end: date, stats: Stats) -> None:
     with engine.begin() as conn:
         for stat_type in ("avg", "min", "max"):
-            _upsert(conn, station_id, period_type, period_start, period_end, stat_type, stats[stat_type])
+            _upsert(conn, wmo_index, period_type, period_start, period_end, stat_type, stats[stat_type])
 
 
 def _decades_in_range(start: date, end: date) -> list[tuple[date, date]]:
@@ -82,7 +82,7 @@ def _months_in_range(start: date, end: date) -> list[tuple[int, int]]:
 
 def recompute_range(
     engine: Engine,
-    station_id: int,
+    wmo_index: int,
     start: date,
     end: date,
     progress_callback: Callable[[date], None] | None = None,
@@ -92,21 +92,21 @@ def recompute_range(
     показать текущую дату и обновить полосу прогресса."""
     day = start
     while day <= end:
-        _store(engine, station_id, "day", day, day, daily_stats(engine, station_id, day))
+        _store(engine, wmo_index, "day", day, day, daily_stats(engine, wmo_index, day))
         if progress_callback is not None:
             progress_callback(day)
         day += timedelta(days=1)
 
     for decade_start, decade_end in _decades_in_range(start, end):
-        stats = decade_stats(engine, station_id, decade_start, decade_end)
-        _store(engine, station_id, "decade", decade_start, decade_end, stats)
+        stats = decade_stats(engine, wmo_index, decade_start, decade_end)
+        _store(engine, wmo_index, "decade", decade_start, decade_end, stats)
 
     for year, month in _months_in_range(start, end):
         month_start = date(year, month, 1)
         month_end = date(year, month, monthrange(year, month)[1])
-        stats = month_stats(engine, station_id, year, month)
-        _store(engine, station_id, "month", month_start, month_end, stats)
+        stats = month_stats(engine, wmo_index, year, month)
+        _store(engine, wmo_index, "month", month_start, month_end, stats)
 
     for year in range(start.year, end.year + 1):
-        stats = year_stats(engine, station_id, year)
-        _store(engine, station_id, "year", date(year, 1, 1), date(year, 12, 31), stats)
+        stats = year_stats(engine, wmo_index, year)
+        _store(engine, wmo_index, "year", date(year, 1, 1), date(year, 12, 31), stats)

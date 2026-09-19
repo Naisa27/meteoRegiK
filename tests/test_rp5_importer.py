@@ -49,7 +49,7 @@ def test_import_file_parses_header_and_rows(tmp_path):
     report = importer.import_file(file_path)
 
     assert report.station_name == "Мосальск"
-    assert report.station_id is not None
+    assert report.wmo_index == 27704
     assert report.total_rows == 2
     assert report.imported_rows == 2
     assert report.skipped_rows == 0
@@ -61,7 +61,7 @@ def test_import_file_parses_header_and_rows(tmp_path):
         rows = conn.execute(select(rp5_readings).order_by(rp5_readings.c.obs_date)).mappings().all()
 
     assert station["name"] == "Мосальск"
-    assert report.station_id == station["id"]
+    assert station["wmo_index"] == report.wmo_index
 
     first, second = rows
     assert first["obs_date"].isoformat() == "2020-01-01"

@@ -1,7 +1,7 @@
 """Общий интерфейс Importer и результат импорта (см. "Экраны UI", п.1 и
 "Решения, согласованные с пользователем" в .claude/docs/plan.md).
 
-Дедупликация зависит от формата: (station_id, obs_date) для ГГ,
+Дедупликация зависит от формата: (wmo_index, obs_date) для ГГ,
 (wmo_index, obs_date, obs_time) для rp5 — строки с уже существующим ключом
 пропускаются, вставляются только новые, без диалогов подтверждения.
 """
@@ -16,10 +16,10 @@ from datetime import date
 class ImportReport:
     """Отчёт по итогам импорта — выводится пользователю на экране "Импорт".
 
-    station_id нужен вызывающему коду (UI), чтобы после успешного импорта
+    wmo_index нужен вызывающему коду (UI), чтобы после успешного импорта
     запустить calculations/recompute.py для затронутого диапазона."""
 
-    station_id: int | None
+    wmo_index: int | None
     station_name: str | None
     period_start: date | None
     period_end: date | None

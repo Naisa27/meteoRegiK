@@ -9,7 +9,6 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
-    ForeignKey,
     Integer,
     MetaData,
     Table,
@@ -114,9 +113,13 @@ gg_readings = Table(
     "gg_readings",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    # station_id — единственная связь со stations (в файле ГГ нет ни названия,
-    # ни wmo_index, только "Индекс ВМО"); station_name кэшируется для читаемости.
-    Column("station_id", Integer, ForeignKey("stations.id"), nullable=False),
+    # Без FK на stations.id — станция идентифицируется wmo_index напрямую
+    # ("Индекс ВМО" в файле ГГ), тем же паттерном, что и rp5_readings (см.
+    # plan.md, п.11 решений: пересмотрено 2026-09-19 — station_id как FK на
+    # автоинкрементный PK stations давал в этом поле "случайные" числа,
+    # непонятные при прямом просмотре данных). station_name кэшируется для
+    # читаемости.
+    Column("wmo_index", Integer, nullable=False),
     Column("station_name", Text, nullable=True),
     Column("obs_date", Date, nullable=False),
     Column("t_avg", Float, nullable=True),
@@ -126,14 +129,15 @@ gg_readings = Table(
     Column("source_file", Text, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
     Column("updated_at", DateTime, nullable=True),
-    UniqueConstraint("station_id", "obs_date", name="uq_gg_readings_key"),
+    UniqueConstraint("wmo_index", "obs_date", name="uq_gg_readings_key"),
 )
 
 computed_indicators = Table(
     "computed_indicators",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("station_id", Integer, ForeignKey("stations.id"), nullable=False),
+    # wmo_index, не station_id — см. комментарий у gg_readings выше.
+    Column("wmo_index", Integer, nullable=False),
     Column("period_type", Text, nullable=False),  # 'day' | 'decade' | 'month' | 'year'
     Column("period_start", Date, nullable=False),
     Column("period_end", Date, nullable=False),
@@ -142,7 +146,7 @@ computed_indicators = Table(
     Column("value", Float, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
     UniqueConstraint(
-        "station_id", "period_type", "period_start", "period_end", "parameter", "stat_type",
+        "wmo_index", "period_type", "period_start", "period_end", "parameter", "stat_type",
         name="uq_computed_indicators_key",
     ),
 )

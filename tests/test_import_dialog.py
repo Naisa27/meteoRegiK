@@ -6,7 +6,7 @@ from meteoregik.ui.import_dialog import format_import_report
 
 def test_format_import_report_with_period():
     report = ImportReport(
-        station_id=1,
+        wmo_index=27704,
         station_name="Мосальск",
         period_start=date(2020, 1, 1),
         period_end=date(2020, 12, 31),
@@ -26,7 +26,7 @@ def test_format_import_report_with_period():
 
 def test_format_import_report_empty_file():
     report = ImportReport(
-        station_id=None,
+        wmo_index=None,
         station_name=None,
         period_start=None,
         period_end=None,
