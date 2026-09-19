@@ -1,8 +1,10 @@
 from datetime import date
 
+from openpyxl import Workbook
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from meteoregik.calculations.recompute import ValueConflict
+from meteoregik.db.migrations import run_migrations
 from meteoregik.db.session import get_engine
 from meteoregik.importers.base import ImportReport
 from meteoregik.ui.import_dialog import ImportDialog, format_conflict_message, format_import_report
@@ -152,3 +154,46 @@ def test_conflict_resolver_remembers_apply_to_all_choice(tmp_path, monkeypatch):
     assert resolver(_make_conflict(22, 1.0, 2.0)) == "old"  # без повторного диалога
     assert resolver(_make_conflict(23, 5.0, 6.0)) == "old"
     assert call_count["n"] == 1  # диалог показан только один раз
+
+
+def test_run_import_shows_clear_message_for_wrong_format(tmp_path, monkeypatch):
+    _qapp()
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+
+    # ГГ-файл, но диалог настроен на импорт rp5 — неверный выбор формата.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"])
+    ws.append([27707, 2020, 1, 1, 1.0, 2.0, 0.0, -1.0])
+    file_path = str(tmp_path / "gg.xlsx")
+    wb.save(file_path)
+
+    dialog = ImportDialog(engine)
+    dialog.file_edit.setText(file_path)
+    dialog.rp5_radio.setChecked(True)
+
+    calls = []
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda parent, title, text: calls.append((title, text))))
+
+    dialog._run_import()
+
+    assert len(calls) == 1
+    title, text = calls[0]
+    assert title == "Неверный формат файла"
+    assert "неверный формат" in text
+    # кнопки снова доступны после ошибки
+    assert dialog.import_btn.isEnabled()
+    assert dialog.browse_btn.isEnabled()
+    assert dialog.close_btn.isEnabled()
+
+
+def test_import_dialog_buttons_have_rounded_corners():
+    _qapp()
+    engine = get_engine(":memory:")
+    dialog = ImportDialog(engine)
+
+    assert dialog.import_btn.objectName() == "primary"
+    assert dialog.browse_btn.objectName() == "secondary"
+    assert dialog.close_btn.objectName() == "secondary"
+    assert "border-radius" in dialog.styleSheet()

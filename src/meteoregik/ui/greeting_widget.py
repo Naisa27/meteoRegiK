@@ -1,6 +1,7 @@
 """Приветственный экран главного окна: заголовок, дата/день недели, живые
-часы. Занимает место прежней заглушки-плейсхолдера в MainWindow, теперь во
-всю площадь окна (верхняя шапка с "meteoRegiK" убрана) — содержимое
+часы, кнопка запуска импорта. Занимает место прежней заглушки-плейсхолдера в
+MainWindow, теперь во всю площадь окна (верхняя шапка с "meteoRegiK" и меню
+"Файл" убраны — единственный вход в импорт теперь эта кнопка) — содержимое
 выровнено к верхней части, а не по центру всего окна.
 
 Оформление — не веб-стиль, а спокойный "исследовательский" тон: засечный
@@ -8,17 +9,22 @@
 духе пасмурного неба и урожая (не дефолтные крем+терракота), иконка
 static/meteo_1.png (прозрачный фон) как единственный акцент вместо крупного
 hero-изображения. У всех подписей явно прозрачный фон — иначе Qt-стиль
-подсвечивает QLabel своим цветом, который отличается от фона виджета."""
+подсвечивает QLabel своим цветом, который отличается от фона виджета.
+
+Виджет не знает про ImportDialog/engine напрямую (чисто декоративный экран) —
+при клике на кнопку испускает import_requested, MainWindow сам решает, что
+делать."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from meteoregik.resources import LOGO_PATH
+from meteoregik.ui import theme
 
 _WEEKDAYS_RU = [
     "понедельник", "вторник", "среда", "четверг",
@@ -29,10 +35,10 @@ _MONTHS_RU_GENITIVE = [
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ]
 
-_BG = "#F6F8FA"
-_TEXT_PRIMARY = "#26333A"
-_TEXT_SECONDARY = "#5B6B74"
-_ACCENT = "#B8862E"
+_BG = theme.BG
+_TEXT_PRIMARY = theme.TEXT_PRIMARY
+_TEXT_SECONDARY = theme.TEXT_SECONDARY
+_ACCENT = theme.ACCENT
 
 
 def _format_date_ru(now: datetime) -> str:
@@ -42,6 +48,8 @@ def _format_date_ru(now: datetime) -> str:
 
 
 class GreetingWidget(QWidget):
+    import_requested = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setStyleSheet(f"background: {_BG};")
@@ -100,6 +108,14 @@ class GreetingWidget(QWidget):
         self._clock_label.setStyleSheet(f"color: {_ACCENT}; background: transparent;")
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._clock_label)
+
+        layout.addSpacing(32)
+
+        import_btn = QPushButton("Импорт данных")
+        import_btn.setStyleSheet(theme.PRIMARY_BUTTON_QSS)
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.clicked.connect(self.import_requested.emit)
+        layout.addWidget(import_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(1)
 

@@ -24,12 +24,24 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.db.schema import gg_readings, stations
-from meteoregik.importers.base import ImportReport, Importer
+from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
 from meteoregik.stations.matching import find_or_create_station
+
+REQUIRED_COLUMNS = ("Индекс ВМО", "Год", "Месяц", "День")
 
 
 def _clean(value: object) -> object | None:
     return None if pd.isna(value) else value
+
+
+def _check_format(df: pd.DataFrame, file_path: str) -> None:
+    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    if missing:
+        raise ImportFormatError(
+            f"«{file_path}» не похож на файл формата ГГ: в нём нет столбцов "
+            f"{', '.join(missing)}. Похоже, выбран неверный формат для импорта "
+            "этого файла — проверьте выбор rp5/ГГ."
+        )
 
 
 def _ensure_station(
@@ -54,6 +66,7 @@ class GgImporter(Importer):
 
     def import_file(self, file_path: str) -> ImportReport:
         df = pd.read_excel(file_path)
+        _check_format(df, file_path)
         source_file = os.path.basename(file_path)
 
         parsed_rows = []

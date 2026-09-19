@@ -5,6 +5,7 @@ from sqlalchemy import select
 from meteoregik.db.migrations import run_migrations
 from meteoregik.db.schema import gg_readings, stations
 from meteoregik.db.session import get_engine
+from meteoregik.importers.base import ImportFormatError
 from meteoregik.importers.gg_importer import GgImporter
 
 COLUMNS = ["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"]
@@ -116,3 +117,20 @@ def test_import_file_is_idempotent_on_reimport(tmp_path):
     with engine.connect() as conn:
         n_rows = len(conn.execute(select(gg_readings.c.id)).all())
     assert n_rows == 1
+
+
+def test_import_file_raises_clear_error_for_wrong_format(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+
+    # Файл с чужими для ГГ столбцами (похож на случайную/неверную выгрузку,
+    # не на rp5 специально — важно только, что нет "Индекс ВМО"/"Год"/...).
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Местное время", "T", "RRR"])
+    ws.append(["01.01.2020 09:00", 1.0, 0.0])
+    file_path = str(tmp_path / "not_gg.xlsx")
+    wb.save(file_path)
+
+    with pytest.raises(ImportFormatError, match="неверный формат"):
+        GgImporter(engine).import_file(file_path)

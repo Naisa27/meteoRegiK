@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from datetime import date
 
 
+class ImportFormatError(ValueError):
+    """Файл не соответствует ожидаемому формату импорта (rp5/ГГ) — типично,
+    когда пользователь выбрал неверный формат в диалоге импорта. Отдельный
+    тип нужен, чтобы UI мог показать понятное сообщение вместо голого
+    KeyError/ValueError при разборе структуры файла."""
+
+
 @dataclass(frozen=True)
 class ImportReport:
     """Отчёт по итогам импорта — выводится пользователю на экране "Импорт".

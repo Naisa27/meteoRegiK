@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from meteoregik.db.schema import rp5_readings
-from meteoregik.importers.base import ImportReport, Importer
+from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
 from meteoregik.stations.matching import find_or_create_station
 
 RP5_HEADER_RE = re.compile(r"Метеостанция\s+(?P<name>.+?),\s*Россия,\s*WMO_ID=(?P<wmo>\d+),")
@@ -72,7 +72,11 @@ def _find_header_row(file_path: str) -> int:
         if isinstance(value, str) and value.strip().startswith("#"):
             last_hash_row = i
     if last_hash_row < 0:
-        raise ValueError(f"{file_path}: не найдена шапка (строки, начинающиеся с '#')")
+        raise ImportFormatError(
+            f"«{file_path}» не похож на файл формата rp5: в нём нет строк шапки, "
+            "начинающихся с '#'. Похоже, выбран неверный формат для импорта "
+            "этого файла — проверьте выбор rp5/ГГ."
+        )
     return last_hash_row + 1
 
 
@@ -80,7 +84,11 @@ def _parse_station_header(file_path: str) -> tuple[str, int]:
     first_line = pd.read_excel(file_path, header=None, nrows=1).iat[0, 0]
     match = RP5_HEADER_RE.search(str(first_line))
     if not match:
-        raise ValueError(f"{file_path}: не удалось разобрать шапку rp5 (название станции/WMO_ID)")
+        raise ImportFormatError(
+            f"«{file_path}» не похож на файл формата rp5: не удалось найти в шапке "
+            "название станции и WMO_ID. Похоже, выбран неверный формат для импорта "
+            "этого файла — проверьте выбор rp5/ГГ."
+        )
     return match.group("name"), int(match.group("wmo"))
 
 

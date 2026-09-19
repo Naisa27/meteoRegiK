@@ -1,9 +1,11 @@
+import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
 
 from meteoregik.db.migrations import run_migrations
 from meteoregik.db.schema import rp5_readings, stations
 from meteoregik.db.session import get_engine
+from meteoregik.importers.base import ImportFormatError
 from meteoregik.importers.rp5_importer import Rp5Importer
 
 DEFAULT_COLUMNS = [
@@ -161,3 +163,19 @@ def test_import_file_handles_missing_optional_columns(tmp_path):
     assert row["U_humidity"] == 90
     assert row["ff3_wind_gust"] is None
     assert row["RRR_precipitation"] is None
+
+
+def test_import_file_raises_clear_error_for_wrong_format(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+
+    # Файл формата ГГ (без "#"-строк шапки) по ошибке выбран как rp5.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"])
+    ws.append([27707, 2020, 1, 1, 1.0, 2.0, 0.0, -1.0])
+    file_path = str(tmp_path / "not_rp5.xlsx")
+    wb.save(file_path)
+
+    with pytest.raises(ImportFormatError, match="неверный формат"):
+        Rp5Importer(engine).import_file(file_path)

@@ -14,7 +14,11 @@ progress_callback(day) на каждый обработанный день.
 ГГ-данные за одну дату дают разный максимум температуры), recompute_range
 вызывает conflict_resolver — модальный диалог с выбором "оставить
 сохранённое" / "взять новое" (и вариантами "...для всех оставшихся", чтобы
-не переспрашивать на каждый день при массовом расхождении)."""
+не переспрашивать на каждый день при массовом расхождении).
+
+Если содержимое файла не соответствует выбранному формату (rp5/ГГ), импортёр
+бросает ImportFormatError с понятным сообщением — обрабатывается отдельно от
+прочих ошибок, с отдельным заголовком диалога (см. importers/base.py)."""
 
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -40,9 +45,10 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from meteoregik.calculations.recompute import ConflictChoice, ValueConflict, recompute_range
-from meteoregik.importers.base import ImportReport
+from meteoregik.importers.base import ImportFormatError, ImportReport
 from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.importers.rp5_importer import Rp5Importer
+from meteoregik.ui import theme
 
 _PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "месяц", "year": "год"}
 _STAT_TYPE_NAMES = {"avg": "средняя", "min": "минимальная", "max": "максимальная"}
@@ -88,23 +94,76 @@ class ImportDialog(QDialog):
         super().__init__(parent)
         self.engine = engine
         self.setWindowTitle("Импорт данных")
-        self.resize(480, 340)
+        self.resize(480, 400)
+        self.setStyleSheet(theme.DIALOG_QSS)
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        subtitle = QLabel("Загрузите файл срочных наблюдений (rp5) или среднесуточных показателей (ГГ).")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
+        layout.addWidget(subtitle)
+
+        layout.addWidget(self._build_form_card())
+
+        self.import_btn = QPushButton("Импортировать")
+        self.import_btn.setObjectName("primary")
+        self.import_btn.clicked.connect(self._run_import)
+        layout.addWidget(self.import_btn)
+
+        self.status_label = QLabel("")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.status_label)
+        self.date_label = QLabel("")
+        self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date_label.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
+        layout.addWidget(self.date_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        self.success_label = QLabel("")
+        self.success_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.success_label.setStyleSheet(f"color: {theme.SUCCESS}; font-weight: bold;")
+        layout.addWidget(self.success_label)
+
+        self.report_label = QLabel("")
+        self.report_label.setWordWrap(True)
+        layout.addWidget(self.report_label, stretch=1)
+
+        self.close_btn = QPushButton("Закрыть")
+        self.close_btn.setObjectName("secondary")
+        self.close_btn.clicked.connect(self.accept)
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_row.addWidget(self.close_btn)
+        layout.addLayout(close_row)
+
+    def _build_form_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setSpacing(12)
 
         file_row = QHBoxLayout()
+        file_row.setSpacing(8)
         file_row.addWidget(QLabel("Файл:"))
         self.file_edit = QLineEdit()
         self.file_edit.setReadOnly(True)
         file_row.addWidget(self.file_edit, stretch=1)
         self.browse_btn = QPushButton("Обзор…")
+        self.browse_btn.setObjectName("secondary")
         self.browse_btn.clicked.connect(self._browse_file)
         file_row.addWidget(self.browse_btn)
-        layout.addLayout(file_row)
+        card_layout.addLayout(file_row)
 
         format_row = QHBoxLayout()
+        format_row.setSpacing(8)
         format_row.addWidget(QLabel("Формат:"))
         self.rp5_radio = QRadioButton("rp5 (срочные наблюдения)")
         self.gg_radio = QRadioButton("ГГ (среднесуточные)")
@@ -115,32 +174,9 @@ class ImportDialog(QDialog):
         format_row.addWidget(self.rp5_radio)
         format_row.addWidget(self.gg_radio)
         format_row.addStretch(1)
-        layout.addLayout(format_row)
+        card_layout.addLayout(format_row)
 
-        self.import_btn = QPushButton("Импортировать")
-        self.import_btn.clicked.connect(self._run_import)
-        layout.addWidget(self.import_btn)
-
-        self.status_label = QLabel("")
-        layout.addWidget(self.status_label)
-        self.date_label = QLabel("")
-        layout.addWidget(self.date_label)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-
-        self.success_label = QLabel("")
-        self.success_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.success_label.setStyleSheet("color: #3B7A3B; font-weight: bold;")
-        layout.addWidget(self.success_label)
-
-        self.report_label = QLabel("")
-        self.report_label.setWordWrap(True)
-        layout.addWidget(self.report_label, stretch=1)
-
-        self.close_btn = QPushButton("Закрыть")
-        self.close_btn.clicked.connect(self.accept)
-        layout.addWidget(self.close_btn)
+        return card
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         """Пока идёт импорт/пересчёт — недоступны выбор файла, запуск
@@ -178,6 +214,10 @@ class ImportDialog(QDialog):
 
             if report.imported_rows > 0 and report.wmo_index is not None:
                 self._recompute_with_progress(report)
+        except ImportFormatError as exc:
+            self.status_label.setText("")
+            QMessageBox.critical(self, "Неверный формат файла", str(exc))
+            return
         except Exception as exc:  # noqa: BLE001 — показываем пользователю любую ошибку импорта
             self.status_label.setText("")
             QMessageBox.critical(self, "Ошибка импорта", str(exc))
