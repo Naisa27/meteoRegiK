@@ -2,34 +2,36 @@ from sqlalchemy import select
 
 from meteoregik.db.migrations import run_migrations
 from meteoregik.db.schema import ru_regions, stations
-from meteoregik.db.seed import ensure_seed_data
+from meteoregik.db.seed import ensure_seed_database
 from meteoregik.db.session import get_engine
 
 
-def test_ensure_seed_data_loads_bundled_csv(tmp_path):
-    engine = get_engine(tmp_path / "test.sqlite3")
-    run_migrations(engine)
+def test_ensure_seed_database_copies_template_when_missing(tmp_path):
+    db_path = tmp_path / "test.sqlite3"
 
-    ensure_seed_data(engine)
+    ensure_seed_database(db_path)
 
+    assert db_path.exists()
+    engine = get_engine(db_path)
+    run_migrations(engine)  # шаблон уже на CURRENT_SCHEMA_VERSION — должно быть no-op
     with engine.connect() as conn:
         n_stations = len(conn.execute(select(stations.c.id)).all())
         n_regions = len(conn.execute(select(ru_regions.c.code)).all())
-        rows = conn.execute(select(stations).where(stations.c.wmo_index == 27612)).mappings().all()
         region = conn.execute(select(ru_regions).where(ru_regions.c.code == 1)).mappings().one()
+        moscow = conn.execute(select(stations).where(stations.c.wmo_index == 27612)).mappings().one()
 
     assert n_stations == 2867
     assert n_regions == 91
     assert region["region"] == "Республика Адыгея"
-    if rows:
-        assert rows[0]["country"] == "ru"
+    assert moscow["name"] == "Москва"
 
 
-def test_ensure_seed_data_does_not_duplicate_or_overwrite_user_edits(tmp_path):
-    engine = get_engine(tmp_path / "test.sqlite3")
+def test_ensure_seed_database_does_not_overwrite_existing_file(tmp_path):
+    db_path = tmp_path / "test.sqlite3"
+
+    ensure_seed_database(db_path)
+    engine = get_engine(db_path)
     run_migrations(engine)
-
-    ensure_seed_data(engine)
 
     with engine.begin() as conn:
         conn.execute(
@@ -38,11 +40,11 @@ def test_ensure_seed_data_does_not_duplicate_or_overwrite_user_edits(tmp_path):
             .values(name="Правка пользователя")
         )
 
-    ensure_seed_data(engine)  # повторный запуск (например, следующий старт приложения)
+    ensure_seed_database(db_path)  # повторный запуск / обновление exe — файл уже есть
 
     with engine.connect() as conn:
         n_stations = len(conn.execute(select(stations.c.id)).all())
         row = conn.execute(select(stations).where(stations.c.wmo_index == 27612)).mappings().one()
 
     assert n_stations == 2867  # не задублировалось
-    assert row["name"] == "Правка пользователя"  # правка не затёрта повторной заливкой
+    assert row["name"] == "Правка пользователя"  # правка не затёрта повторным копированием
