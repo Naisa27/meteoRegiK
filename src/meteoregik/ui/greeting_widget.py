@@ -15,7 +15,7 @@ hero-изображения. У всех подписей явно прозра�
 декоративный экран) — при клике на кнопки испускает import_requested /
 data_browser_requested, MainWindow сам решает, что делать. Обе кнопки на
 одной строке под часами — "Импорт данных" (акцент — урожайное золото) и
-"Просмотр данных" (второй акцент — пасмурно-небесный синий, та же пара
+"Просмотр исходных данных" (второй акцент — пасмурно-небесный синий, та же пара
 цветов, что в theme.py)."""
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ class GreetingWidget(QWidget):
         import_btn.clicked.connect(self.import_requested.emit)
         button_row.addWidget(import_btn)
 
-        data_browser_btn = QPushButton("Просмотр данных")
+        data_browser_btn = QPushButton("Просмотр исходных данных")
         data_browser_btn.setStyleSheet(theme.SKY_BUTTON_QSS)
         data_browser_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         data_browser_btn.clicked.connect(self.data_browser_requested.emit)

@@ -44,3 +44,42 @@ def test_data_browser_button_opens_data_browser_dialog():
 
     mock_dialog_cls.assert_called_once_with(engine, window)
     mock_dialog_cls.return_value.exec.assert_called_once()
+
+
+def test_center_on_screen_places_window_in_the_middle_of_available_area():
+    _qapp()
+    window = MainWindow(get_engine(":memory:"))
+    window.resize(400, 300)  # заведомо помещается на любой экран
+    window.move(0, 0)
+
+    window.center_on_screen()
+
+    available = window.screen().availableGeometry()
+    center, target = window.frameGeometry().center(), available.center()
+    assert abs(center.x() - target.x()) <= 2
+    assert abs(center.y() - target.y()) <= 2
+
+
+def test_center_on_screen_shrinks_and_keeps_window_inside_a_small_screen():
+    _qapp()
+    window = MainWindow(get_engine(":memory:"))
+    available = window.screen().availableGeometry()
+    window.resize(available.width() + 500, available.height() + 500)
+
+    window.center_on_screen()
+
+    assert window.width() <= available.width()
+    assert window.height() <= available.height()
+    assert window.x() >= available.left()
+    assert window.y() >= available.top()
+
+
+def test_no_button_has_focus_ring_at_startup():
+    _qapp()
+    window = MainWindow(get_engine(":memory:"))
+    window.show()
+    QApplication.processEvents()
+
+    assert not isinstance(window.focusWidget(), QPushButton)
+    window.close()
+

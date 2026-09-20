@@ -17,47 +17,156 @@ greeting_widget.py (спокойные бело-голубые тона + акц
 
 from __future__ import annotations
 
+from meteoregik.resources import STATIC_DIR
+
 BG = "#F6F8FA"
 TEXT_PRIMARY = "#26333A"
 TEXT_SECONDARY = "#5B6B74"
 ACCENT = "#B8862E"  # урожайное золото — основное действие (импорт данных)
 ACCENT_HOVER = "#A6761F"
+ACCENT_PRESSED = "#8A5C14"
 ACCENT_DISABLED = "#DDCBA6"
 # Второй акцент — пасмурно-небесный синий, пара к "урожайному золоту" в той
 # же агрометеорологической палитре (солнце/урожай vs небо/влага), не просто
 # случайный "второй цвет". Используется для действий, отличных от основного
-# ("Просмотр данных" рядом с "Импорт данных" — см. правки 2026-09-19).
+# ("Просмотр исходных данных" рядом с "Импорт данных" — см. правки 2026-09-19).
 ACCENT_SKY = "#3E6B87"
 ACCENT_SKY_HOVER = "#325571"
+ACCENT_SKY_PRESSED = "#264357"
 ACCENT_SKY_DISABLED = "#A9BEC9"
 BORDER = "#D7DEE3"
 INPUT_BG = "#FFFFFF"
 INPUT_BG_READONLY = "#EEF2F4"
 SUCCESS = "#3B7A3B"
+# Шапка таблиц — светло-голубой тон в паре с ACCENT_SKY
+HEADER_BG = "#DCE7EE"
+HEADER_BORDER = "#C3D2DB"
+CALENDAR_DISABLED_TEXT = "#B7C2C9"  # недоступные (будущие) дни календаря
+# Кольцо фокуса кнопок: тёмное, контраст не ниже 3:1 и к фону окна, и к золотой
+# заливке (WCAG 2.2, focus-appearance); плюс жирный шрифт — фокус виден не
+# только цветом (см. ui-ux-pro-max: focus-states).
+FOCUS_RING = "#111A20"  # почти чёрный: TEXT_PRIMARY давал на синей заливке лишь 2.2:1
+FOCUS_RING_WIDTH = 2
+# Стрелка выпадающих списков/календаря: при стилизации рамки Qt перестаёт
+# рисовать родную стрелку, поэтому рисуем свою (static/arrow_down.png).
+ARROW_DOWN = (STATIC_DIR / "arrow_down.png").as_posix()
 
 
-def _filled_button_qss(base: str, hover: str, disabled: str) -> str:
-    return f"""
-QPushButton {{
-    border-radius: 8px;
-    padding: 10px 28px;
-    background-color: {base};
-    color: #FFFFFF;
-    border: none;
-    font-weight: 600;
-}}
-QPushButton:hover {{
-    background-color: {hover};
-}}
-QPushButton:disabled {{
-    background-color: {disabled};
-    color: #FFFFFF;
-}}
-"""
+def _padding_values(padding: str) -> tuple[int, int]:
+    vertical, horizontal = (int(v.removesuffix("px")) for v in padding.split())
+    return vertical, horizontal
 
 
-PRIMARY_BUTTON_QSS = _filled_button_qss(ACCENT, ACCENT_HOVER, ACCENT_DISABLED)
-SKY_BUTTON_QSS = _filled_button_qss(ACCENT_SKY, ACCENT_SKY_HOVER, ACCENT_SKY_DISABLED)
+def _shifted_padding(vertical: int, horizontal: int, shift: int = 0) -> str:
+    """Отступы с вертикальным сдвигом содержимого (shift > 0 — вниз)."""
+    return f"{vertical + shift}px {horizontal}px {vertical - shift}px {horizontal}px"
+
+
+def _pressed_padding(padding: str) -> str:
+    """Эффект вдавливания кнопки: при нажатии содержимое сдвигается на 1px вниз
+    (верхний отступ +1, нижний -1). Qt-стили не умеют transform/inset-тень,
+    поэтому эффект нажатия = сдвиг текста + более тёмный фон и рамка."""
+    return _shifted_padding(*_padding_values(padding), shift=1)
+
+
+def _button_qss(
+    selectors: tuple[str, ...],
+    *,
+    bg: str,
+    hover: str,
+    pressed: str,
+    disabled_bg: str,
+    text: str,
+    disabled_text: str,
+    border: str = "none",
+    pressed_border: str | None = None,
+    disabled_border: str | None = None,
+    padding: str = "8px 20px",
+    bold: bool = False,
+) -> str:
+    """Полный набор состояний кнопки (обычное/hover/фокус/нажатие/недоступна) —
+    единый стандарт для всех кнопок приложения: нажатие и фокус всегда
+    сопровождаются видимой реакцией (см. правки 2026-09-20 и 2026-09-21).
+
+    Фокус — жирный шрифт и кольцо FOCUS_RING_WIDTH px. Рамка при фокусе шире
+    обычной (у заливных кнопок её вовсе нет), поэтому отступы уменьшаются на
+    разницу — размер кнопки при смене фокуса не «прыгает». Для нажатой кнопки
+    с фокусом (а нажатая кнопка почти всегда в фокусе) — отдельное правило
+    `:focus:pressed`: оно специфичнее и `:focus`, и `:pressed`."""
+
+    def rule(state: str, body: str) -> str:
+        return ", ".join(f"{sel}{state}" for sel in selectors) + " {" + body + "}\n"
+
+    vertical, horizontal = _padding_values(padding)
+    border_width = 0 if border == "none" else int(border.split("px")[0])
+    grow = FOCUS_RING_WIDTH - border_width
+    focus_v, focus_h = vertical - grow, horizontal - grow
+    ring = f"border: {FOCUS_RING_WIDTH}px solid {FOCUS_RING};"
+
+    weight = "font-weight: 600;" if bold else ""
+    return (
+        rule("", f"border-radius: 8px; padding: {padding}; background-color: {bg};"
+                 f" color: {text}; border: {border}; {weight}")
+        + rule(":hover", f"background-color: {hover};")
+        + rule(":focus", f"{ring} padding: {focus_v}px {focus_h}px; font-weight: 700;")
+        + rule(":pressed", f"background-color: {pressed}; padding: {_pressed_padding(padding)};"
+                           + (f" border-color: {pressed_border};" if pressed_border else ""))
+        + rule(":focus:pressed", f"background-color: {pressed}; {ring}"
+                                 f" padding: {_shifted_padding(focus_v, focus_h, 1)};")
+        + rule(":disabled", f"background-color: {disabled_bg}; color: {disabled_text};"
+                            + (f" border-color: {disabled_border};" if disabled_border else ""))
+    )
+
+
+def _filled_button_qss(base: str, hover: str, pressed: str, disabled: str) -> str:
+    return _button_qss(
+        ("QPushButton",),
+        bg=base, hover=hover, pressed=pressed, disabled_bg=disabled,
+        text="#FFFFFF", disabled_text="#FFFFFF", padding="10px 28px", bold=True,
+    )
+
+
+PRIMARY_BUTTON_QSS = _filled_button_qss(ACCENT, ACCENT_HOVER, ACCENT_PRESSED, ACCENT_DISABLED)
+SKY_BUTTON_QSS = _filled_button_qss(ACCENT_SKY, ACCENT_SKY_HOVER, ACCENT_SKY_PRESSED, ACCENT_SKY_DISABLED)
+
+# Стили кнопок по objectName. Голый QPushButton (без objectName — например,
+# кнопки QMessageBox) выглядит как "secondary", чтобы все кнопки приложения
+# были в одном стиле и с одинаковой реакцией на нажатие.
+BUTTON_QSS = (
+    _button_qss(
+        ("QPushButton", "QPushButton#secondary"),
+        bg="transparent", hover="#ECF1F4", pressed="#D5DFE5", disabled_bg="transparent",
+        text=TEXT_PRIMARY, disabled_text=TEXT_SECONDARY,
+        border=f"1px solid {BORDER}", pressed_border="#AEBCC5", disabled_border="#E7ECEF",
+    )
+    + _button_qss(
+        ("QPushButton#primary",),
+        bg=ACCENT, hover=ACCENT_HOVER, pressed=ACCENT_PRESSED, disabled_bg=ACCENT_DISABLED,
+        text="#FFFFFF", disabled_text="#FFFFFF", bold=True,
+    )
+    + _button_qss(
+        ("QPushButton#skySoft",),  # светло-голубая: вспомогательные фильтры (в тон ACCENT_SKY)
+        bg="#DCE9F1", hover="#CADDE9", pressed="#AECBDC", disabled_bg="#EDF3F7",
+        text="#2F5F7C", disabled_text="#9DB5C3",
+        border="1px solid #B5CFDE", pressed_border="#8FB5CB", disabled_border="#DDE9F0",
+    )
+    + _button_qss(
+        ("QPushButton#add",),  # светло-зелёная: добавление
+        bg="#DDF0DA", hover="#CDE8C9", pressed="#B5D7AF", disabled_bg="#EFF6EE",
+        text="#2B6A2E", disabled_text="#9DB39B",
+        border="1px solid #B3D8AD", pressed_border="#88BA80", disabled_border="#DDE9DA",
+    )
+    + _button_qss(
+        ("QPushButton#danger",),  # светло-красная: удаление
+        bg="#F9DDDD", hover="#F4CBCB", pressed="#EBAFAF", disabled_bg="#FCF0F0",
+        text="#A03030", disabled_text="#CDA5A5",
+        border="1px solid #E8B3B3", pressed_border="#D68888", disabled_border="#F3DCDC",
+    )
+)
+
+# Стиль всего приложения (QApplication.setStyleSheet, см. main.py) — чтобы
+# любая новая кнопка автоматически получала стандартную реакцию на нажатие.
+APP_QSS = BUTTON_QSS
 
 DIALOG_QSS = f"""
 QDialog {{
@@ -72,12 +181,43 @@ QFrame#card {{
     border: 1px solid {BORDER};
     border-radius: 10px;
 }}
-QLineEdit {{
+QLineEdit, QComboBox {{
     border: 1px solid {BORDER};
     border-radius: 6px;
     padding: 6px 10px;
     background: {INPUT_BG};
     color: {TEXT_PRIMARY};
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 28px;
+    border: none;
+}}
+QComboBox::down-arrow {{
+    image: url("{ARROW_DOWN}");
+    width: 12px;
+    height: 8px;
+}}
+QFrame#group {{
+    background: transparent;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+}}
+QHeaderView::section {{
+    background-color: {HEADER_BG};
+    color: {TEXT_PRIMARY};
+    font-weight: 600;
+    padding: 6px 8px;
+    border: none;
+    border-right: 1px solid {HEADER_BORDER};
+    border-bottom: 1px solid {HEADER_BORDER};
+}}
+QTableCornerButton::section {{
+    background-color: {HEADER_BG};
+    border: none;
+    border-right: 1px solid {HEADER_BORDER};
+    border-bottom: 1px solid {HEADER_BORDER};
 }}
 QLineEdit:read-only {{
     background: {INPUT_BG_READONLY};
@@ -100,33 +240,57 @@ QProgressBar::chunk {{
     background-color: {ACCENT};
     border-radius: 6px;
 }}
-QPushButton {{
-    border-radius: 8px;
-    padding: 8px 20px;
+{BUTTON_QSS}
+"""
+
+# Календарь-выпадашка поля даты (ui/date_field.py): голубая панель навигации,
+# выбранный день — основным акцентом, будущие (недоступные) дни бледные.
+CALENDAR_QSS = f"""
+QFrame#calendarPopup {{
+    background: {INPUT_BG};
+    border: 1px solid {BORDER};
 }}
-QPushButton#primary {{
-    background-color: {ACCENT};
-    color: #FFFFFF;
+QCalendarWidget QWidget#qt_calendar_navigationbar {{
+    background-color: {HEADER_BG};
+    border-radius: 6px;
+}}
+QCalendarWidget QToolButton {{
+    color: {TEXT_PRIMARY};
+    background: transparent;
     border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
     font-weight: 600;
 }}
-QPushButton#primary:hover {{
-    background-color: {ACCENT_HOVER};
+QCalendarWidget QToolButton:hover {{
+    background-color: #C9D9E3;
 }}
-QPushButton#primary:disabled {{
-    background-color: {ACCENT_DISABLED};
-    color: #FFFFFF;
+QCalendarWidget QToolButton:pressed {{
+    background-color: #B3C8D6;
 }}
-QPushButton#secondary {{
-    background-color: transparent;
+QCalendarWidget QToolButton::menu-indicator {{
+    image: none;
+}}
+QCalendarWidget QMenu {{
+    background: {INPUT_BG};
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER};
 }}
-QPushButton#secondary:hover {{
-    background-color: #ECF1F4;
+QCalendarWidget QSpinBox {{
+    background: {INPUT_BG};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    padding: 2px 4px;
 }}
-QPushButton#secondary:disabled {{
-    color: {TEXT_SECONDARY};
-    border-color: #E7ECEF;
+QCalendarWidget QAbstractItemView:enabled {{
+    background: {INPUT_BG};
+    color: {TEXT_PRIMARY};
+    selection-background-color: {ACCENT};
+    selection-color: #FFFFFF;
+    outline: none;
+}}
+QCalendarWidget QAbstractItemView:disabled {{
+    color: {CALENDAR_DISABLED_TEXT};
 }}
 """

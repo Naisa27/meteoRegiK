@@ -11,6 +11,7 @@ from meteoregik.db.migrations import run_migrations
 from meteoregik.db.seed import ensure_seed_database
 from meteoregik.db.session import default_db_path, get_engine
 from meteoregik.resources import APP_ICON_PATH
+from meteoregik.ui import theme
 from meteoregik.ui.main_window import MainWindow
 
 
@@ -22,7 +23,9 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+    app.setStyleSheet(theme.APP_QSS)  # единый стиль кнопок (в т.ч. реакция на нажатие)
     window = MainWindow(engine)
+    window.center_on_screen()
     window.show()
     sys.exit(app.exec())
 

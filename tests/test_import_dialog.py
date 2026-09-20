@@ -42,6 +42,17 @@ def test_format_import_report_with_period():
     assert "Пропущено (уже существуют): 10" in text
 
 
+def test_format_import_report_shows_rows_without_data_only_when_known():
+    base = dict(
+        wmo_index=27704, station_name="Мосальск", period_start=date(2020, 1, 1),
+        period_end=date(2020, 1, 2), total_rows=10, imported_rows=6, skipped_rows=1,
+    )
+
+    assert "Строк без данных (не загружены): 3" in format_import_report(ImportReport(**base, rows_without_data=3))
+    assert "Строк без данных (не загружены): 0" in format_import_report(ImportReport(**base, rows_without_data=0))
+    assert "без данных" not in format_import_report(ImportReport(**base))  # rp5: проверки нет
+
+
 def test_format_import_report_empty_file():
     report = ImportReport(
         wmo_index=None,
@@ -197,3 +208,22 @@ def test_import_dialog_buttons_have_rounded_corners():
     assert dialog.browse_btn.objectName() == "secondary"
     assert dialog.close_btn.objectName() == "secondary"
     assert "border-radius" in dialog.styleSheet()
+
+
+def test_import_dialog_fits_full_report_without_clipping():
+    _qapp()
+    engine = get_engine(":memory:")
+    dialog = ImportDialog(engine)
+    dialog.show()
+    report = ImportReport(
+        27707, "Сухиничи", date(1959, 7, 1), date(2025, 2, 28),
+        total_rows=24472, imported_rows=23688, skipped_rows=0, rows_without_data=784,
+    )
+
+    dialog.report_label.setText(format_import_report(report))
+    QApplication.processEvents()
+
+    assert "Строк без данных (не загружены): 784" in dialog.report_label.text()
+    assert dialog.report_label.height() >= dialog.report_label.sizeHint().height()
+    assert dialog.report_label.height() >= dialog.report_label.fontMetrics().lineSpacing() * 6
+

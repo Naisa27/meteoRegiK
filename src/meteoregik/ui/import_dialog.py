@@ -50,6 +50,8 @@ from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.importers.rp5_importer import Rp5Importer
 from meteoregik.ui import theme
 
+REPORT_LINES = 6  # строк в тексте format_import_report (у ГГ; у rp5 на одну меньше)
+
 _PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "месяц", "year": "год"}
 _STAT_TYPE_NAMES = {"avg": "средняя", "min": "минимальная", "max": "максимальная"}
 
@@ -80,13 +82,16 @@ def format_import_report(report: ImportReport) -> str:
     period = "—"
     if report.period_start is not None and report.period_end is not None:
         period = f"{report.period_start.isoformat()} — {report.period_end.isoformat()}"
-    return (
-        f"Станция: {report.station_name or '—'}\n"
-        f"Период: {period}\n"
-        f"Всего строк в файле: {report.total_rows}\n"
-        f"Импортировано: {report.imported_rows}\n"
-        f"Пропущено (уже существуют): {report.skipped_rows}"
-    )
+    lines = [
+        f"Станция: {report.station_name or '—'}",
+        f"Период: {period}",
+        f"Всего строк в файле: {report.total_rows}",
+        f"Импортировано: {report.imported_rows}",
+        f"Пропущено (уже существуют): {report.skipped_rows}",
+    ]
+    if report.rows_without_data is not None:
+        lines.append(f"Строк без данных (не загружены): {report.rows_without_data}")
+    return "\n".join(lines)
 
 
 class ImportDialog(QDialog):
@@ -94,7 +99,7 @@ class ImportDialog(QDialog):
         super().__init__(parent)
         self.engine = engine
         self.setWindowTitle("Импорт данных")
-        self.resize(480, 400)
+        self.resize(480, 520)
         self.setStyleSheet(theme.DIALOG_QSS)
         self._build_ui()
 
@@ -133,6 +138,8 @@ class ImportDialog(QDialog):
 
         self.report_label = QLabel("")
         self.report_label.setWordWrap(True)
+        # место под все строки отчёта (сейчас их 6) — иначе последняя обрезается
+        self.report_label.setMinimumHeight(self.report_label.fontMetrics().lineSpacing() * REPORT_LINES + 8)
         layout.addWidget(self.report_label, stretch=1)
 
         self.close_btn = QPushButton("Закрыть")

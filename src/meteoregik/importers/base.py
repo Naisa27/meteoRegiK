@@ -24,7 +24,12 @@ class ImportReport:
     """Отчёт по итогам импорта — выводится пользователю на экране "Импорт".
 
     wmo_index нужен вызывающему коду (UI), чтобы после успешного импорта
-    запустить calculations/recompute.py для затронутого диапазона."""
+    запустить calculations/recompute.py для затронутого диапазона.
+
+    rows_without_data — число строк файла, в которых нет ни одного значимого
+    значения (не загружаются в БД); None — формат такой проверки не делает
+    (rp5), строка в отчёте не выводится. Для ГГ: total_rows == imported_rows +
+    skipped_rows + rows_without_data."""
 
     wmo_index: int | None
     station_name: str | None
@@ -33,6 +38,7 @@ class ImportReport:
     total_rows: int
     imported_rows: int
     skipped_rows: int
+    rows_without_data: int | None = None
 
 
 class Importer:

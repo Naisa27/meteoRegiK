@@ -11,6 +11,11 @@
 (wmo_index -> name), который передаёт вызывающий код (UI: экран "Импорт").
 Без callback'а и без существующей станции с таким wmo_index импорт падает с
 понятной ошибкой, а не тихо пропускает строки.
+
+Строка без единого значимого значения (все четыре — Tavg, Tmax, Tmin, RRR —
+пусты) не загружается и не участвует ни в периоде отчёта, ни в создании
+станции (иначе из-за пустой строки пришлось бы спрашивать имя новой
+станции); их количество попадает в отчёт (rows_without_data).
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
 from meteoregik.stations.matching import find_or_create_station
 
 REQUIRED_COLUMNS = ("Индекс ВМО", "Год", "Месяц", "День")
+VALUE_FIELDS = ("t_avg", "t_min", "t_max", "rrr_precipitation")
 
 
 def _clean(value: object) -> object | None:
@@ -84,8 +90,12 @@ class GgImporter(Importer):
                 }
             )
 
+        total_rows = len(parsed_rows)
+        parsed_rows = [r for r in parsed_rows if any(r[field] is not None for field in VALUE_FIELDS)]
+        rows_without_data = total_rows - len(parsed_rows)
+
         if not parsed_rows:
-            return ImportReport(None, None, None, None, 0, 0, 0)
+            return ImportReport(None, None, None, None, total_rows, 0, 0, rows_without_data)
 
         period_start = min(r["obs_date"] for r in parsed_rows)
         period_end = max(r["obs_date"] for r in parsed_rows)
@@ -136,7 +146,8 @@ class GgImporter(Importer):
             station_name=station_names[primary_wmo_index],
             period_start=period_start,
             period_end=period_end,
-            total_rows=len(parsed_rows),
+            total_rows=total_rows,
             imported_rows=len(new_rows),
             skipped_rows=len(parsed_rows) - len(new_rows),
+            rows_without_data=rows_without_data,
         )

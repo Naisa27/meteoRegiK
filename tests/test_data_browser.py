@@ -133,6 +133,7 @@ def test_insert_row_and_duplicate_key_raises(tmp_path):
     engine = _make_engine(tmp_path)
 
     model = ReadingsTableModel(engine, rp5_readings, RP5_COLUMNS, {"T_temperature"})
+    model.set_filters(None, None, None)
     model.insert_row({"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "obs_time": time(9, 0)})
 
     assert model.total_count == 1

@@ -18,3 +18,6 @@ dist/
 /meteoregik.sqlite3
 /meteoregik.sqlite3-wal
 /meteoregik.sqlite3-shm
+
+# Локальные пользовательские настройки интерфейса (preferences.py) — рядом с БД
+/meteoregik_settings.json

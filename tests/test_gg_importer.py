@@ -134,3 +134,51 @@ def test_import_file_raises_clear_error_for_wrong_format(tmp_path):
 
     with pytest.raises(ImportFormatError, match="неверный формат"):
         GgImporter(engine).import_file(file_path)
+
+
+def test_rows_without_any_value_are_not_imported_and_counted(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+
+    file_path = _write_gg_xlsx(
+        tmp_path / "gg.xlsx",
+        rows=[
+            [27707, 2020, 1, 1, None, None, None, None],  # пустая — не грузим
+            [27707, 2020, 1, 2, None, None, 0.0, None],  # одного RRR достаточно (и 0 — это данные)
+            [27707, 2020, 1, 3, None, 5.0, None, None],  # одного Tmax достаточно
+            [27707, 2020, 1, 4, None, None, None, None],  # пустая — не грузим
+        ],
+    )
+
+    report = GgImporter(engine, name_resolver=lambda wmo: "Сухиничи").import_file(file_path)
+
+    assert report.total_rows == 4
+    assert report.imported_rows == 2
+    assert report.skipped_rows == 0
+    assert report.rows_without_data == 2
+    # период — только по строкам с данными
+    assert report.period_start.isoformat() == "2020-01-02"
+    assert report.period_end.isoformat() == "2020-01-03"
+    with engine.connect() as conn:
+        dates = [r[0].isoformat() for r in conn.execute(select(gg_readings.c.obs_date).order_by(gg_readings.c.obs_date))]
+    assert dates == ["2020-01-02", "2020-01-03"]
+
+
+def test_file_of_only_empty_rows_imports_nothing_and_does_not_create_station(tmp_path):
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    file_path = _write_gg_xlsx(
+        tmp_path / "gg.xlsx",
+        rows=[[55555, 2020, 1, 1, None, None, None, None], [55555, 2020, 1, 2, None, None, None, None]],
+    )
+
+    def _fail(wmo):
+        raise AssertionError("имя станции не должно запрашиваться из-за пустых строк")
+
+    report = GgImporter(engine, name_resolver=_fail).import_file(file_path)
+
+    assert (report.total_rows, report.imported_rows, report.rows_without_data) == (2, 0, 2)
+    assert report.wmo_index is None
+    with engine.connect() as conn:
+        assert conn.execute(select(gg_readings)).first() is None
+        assert conn.execute(select(stations).where(stations.c.wmo_index == 55555)).first() is None
