@@ -7,9 +7,14 @@ import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from meteoregik.db.migrations import run_migrations
-from meteoregik.db.schema import rp5_readings, ru_regions, stations
+from meteoregik.db.schema import computed_indicators, rp5_readings, ru_regions, stations
 from meteoregik.db.session import get_engine
-from meteoregik.stations.choices import StationChoice, load_directory_stations, load_stations_in_table
+from meteoregik.stations.choices import (
+    StationChoice,
+    load_directory_stations,
+    load_stations_in_table,
+    load_stations_with_computed_indicators,
+)
 from meteoregik.ui.dialogs import ask_yes_no
 from meteoregik.ui.station_combo import ALL_STATIONS_TEXT, StationCombo
 
@@ -67,6 +72,39 @@ def test_stations_in_table_use_directory_name_falling_back_to_cached_and_skip_nu
     # имя из справочника приоритетнее кэшированного; станции нет в справочнике —
     # берётся кэшированное; дубли сроков схлопнуты, строка без индекса пропущена
     assert labels == ["Сухиничи, Калужская область (27707)", "Только в файле (99999)"]
+
+
+def test_stations_with_computed_indicators_only_lists_stations_with_aggregates(tmp_path):
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(
+            computed_indicators.insert(),
+            [
+                {
+                    "wmo_index": 27707,
+                    "period_type": "year",
+                    "period_start": date(2020, 1, 1),
+                    "period_end": date(2020, 12, 31),
+                    "parameter": "T",
+                    "stat_type": "avg",
+                    "value": 5.0,
+                },
+                {
+                    "wmo_index": 27707,
+                    "period_type": "year",
+                    "period_start": date(2021, 1, 1),
+                    "period_end": date(2021, 12, 31),
+                    "parameter": "T",
+                    "stat_type": "avg",
+                    "value": 6.0,
+                },
+            ],
+        )
+
+    labels = [c.label for c in load_stations_with_computed_indicators(engine)]
+    # только 27707 (Сухиничи) — единственная станция с агрегатами; дубль по
+    # годам схлопнут group_by, остальные станции из справочника не попадают
+    assert labels == ["Сухиничи, Калужская область (27707)"]
 
 
 def test_combo_all_mode_empty_text_means_all_and_is_case_insensitive():

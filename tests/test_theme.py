@@ -10,7 +10,7 @@ def test_every_button_style_has_hover_pressed_and_disabled_states():
     ):
         for state in ("hover", "pressed", "disabled"):
             assert f"{selector}:{state}" in theme.BUTTON_QSS, (selector, state)
-    for qss in (theme.PRIMARY_BUTTON_QSS, theme.SKY_BUTTON_QSS):
+    for qss in (theme.PRIMARY_BUTTON_QSS, theme.SKY_BUTTON_QSS, theme.GRASS_BUTTON_QSS):
         assert "QPushButton:pressed" in qss
 
 
@@ -33,7 +33,7 @@ def test_every_button_style_has_visible_focus_ring_and_bold_text():
         assert f"{selector}:focus:pressed" in theme.BUTTON_QSS, selector
     assert f"border: {theme.FOCUS_RING_WIDTH}px solid {theme.FOCUS_RING}" in theme.BUTTON_QSS
     assert "font-weight: 700" in theme.BUTTON_QSS
-    for qss in (theme.PRIMARY_BUTTON_QSS, theme.SKY_BUTTON_QSS):
+    for qss in (theme.PRIMARY_BUTTON_QSS, theme.SKY_BUTTON_QSS, theme.GRASS_BUTTON_QSS):
         assert "QPushButton:focus" in qss
 
 
@@ -45,9 +45,16 @@ def _relative_luminance(hex_color: str) -> float:
 
 def test_focus_ring_has_3_to_1_contrast_against_window_and_button_fills():
     ring = _relative_luminance(theme.FOCUS_RING)
-    for background in (theme.BG, theme.ACCENT, theme.ACCENT_SKY, "#DDF0DA", "#F9DDDD", "#DCE9F1"):
+    for background in (theme.BG, theme.ACCENT, theme.ACCENT_SKY, theme.ACCENT_GRASS, "#DDF0DA", "#F9DDDD", "#DCE9F1"):
         lighter, darker = sorted((ring, _relative_luminance(background)), reverse=True)
         assert (lighter + 0.05) / (darker + 0.05) >= 3, background
+
+
+def test_grass_accent_has_at_least_3_to_1_contrast_against_white_button_text():
+    grass = _relative_luminance(theme.ACCENT_GRASS)
+    white = _relative_luminance("#FFFFFF")
+    lighter, darker = sorted((grass, white), reverse=True)
+    assert (lighter + 0.05) / (darker + 0.05) >= 3
 
 
 def test_focus_ring_does_not_change_button_size():

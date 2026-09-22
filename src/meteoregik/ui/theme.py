@@ -34,6 +34,20 @@ ACCENT_SKY = "#3E6B87"
 ACCENT_SKY_HOVER = "#325571"
 ACCENT_SKY_PRESSED = "#264357"
 ACCENT_SKY_DISABLED = "#A9BEC9"
+# Третий акцент — травяной зелёный, третий естественный элемент той же
+# агрометеорологической палитры (солнце/урожай, небо/влага, растительность),
+# для кнопки "Просмотр агрегатных данных" на приветственном экране (2026-09-22).
+# Не переиспользует зелёный из BUTTON_QSS#add ("добавить строку" в
+# data_browser.py) — та же семантика была бы обманчива на кнопке другого
+# уровня важности. HEX подобран той же формулой оттенков, что и у
+# ACCENT_SKY (hover ~0.81, pressed ~0.63, disabled — смешение с белым
+# t≈0.44), контраст с белым текстом кнопки 5.77:1 (не ниже, чем у
+# ACCENT_SKY 5.74:1) — с запасом выше минимума WCAG 2.2 для полужирного
+# текста кнопки (3:1 для крупного текста).
+ACCENT_GRASS = "#46703A"
+ACCENT_GRASS_HOVER = "#395B2F"
+ACCENT_GRASS_PRESSED = "#2C4624"
+ACCENT_GRASS_DISABLED = "#AEC0A8"
 BORDER = "#D7DEE3"
 INPUT_BG = "#FFFFFF"
 INPUT_BG_READONLY = "#EEF2F4"
@@ -128,6 +142,7 @@ def _filled_button_qss(base: str, hover: str, pressed: str, disabled: str) -> st
 
 PRIMARY_BUTTON_QSS = _filled_button_qss(ACCENT, ACCENT_HOVER, ACCENT_PRESSED, ACCENT_DISABLED)
 SKY_BUTTON_QSS = _filled_button_qss(ACCENT_SKY, ACCENT_SKY_HOVER, ACCENT_SKY_PRESSED, ACCENT_SKY_DISABLED)
+GRASS_BUTTON_QSS = _filled_button_qss(ACCENT_GRASS, ACCENT_GRASS_HOVER, ACCENT_GRASS_PRESSED, ACCENT_GRASS_DISABLED)
 
 # Стили кнопок по objectName. Голый QPushButton (без objectName — например,
 # кнопки QMessageBox) выглядит как "secondary", чтобы все кнопки приложения

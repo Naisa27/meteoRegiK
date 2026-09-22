@@ -7,6 +7,7 @@ from sqlalchemy.engine import Engine
 from meteoregik.ui.data_browser import DataBrowserDialog
 from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
+from meteoregik.ui.query_panel import AggregateViewDialog
 
 
 class MainWindow(QMainWindow):
@@ -14,9 +15,10 @@ class MainWindow(QMainWindow):
     дашборд, карта, экспорт, справочник станций) подключаются по мере
     реализации — см. раздел "Экраны UI" в .claude/docs/plan.md.
 
-    Без верхнего меню — действия (импорт, просмотр данных) доступны кнопками
-    на приветственном экране (см. GreetingWidget.import_requested /
-    .data_browser_requested)."""
+    Без верхнего меню — действия (импорт, просмотр данных, просмотр
+    агрегатных данных) доступны кнопками на приветственном экране (см.
+    GreetingWidget.import_requested / .data_browser_requested /
+    .aggregate_view_requested)."""
 
     def __init__(self, engine: Engine) -> None:
         super().__init__()
@@ -32,6 +34,7 @@ class MainWindow(QMainWindow):
         greeting = GreetingWidget()
         greeting.import_requested.connect(self._open_import_dialog)
         greeting.data_browser_requested.connect(self._open_data_browser)
+        greeting.aggregate_view_requested.connect(self._open_aggregate_view)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
         self._initial_focus_set = False
@@ -67,4 +70,8 @@ class MainWindow(QMainWindow):
 
     def _open_data_browser(self) -> None:
         dialog = DataBrowserDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_aggregate_view(self) -> None:
+        dialog = AggregateViewDialog(self.engine, self)
         dialog.exec()

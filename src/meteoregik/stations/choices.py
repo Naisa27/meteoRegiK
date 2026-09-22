@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from sqlalchemy import Integer, Table, and_, cast, func, select
 from sqlalchemy.engine import Engine
 
-from meteoregik.db.schema import ru_regions, stations
+from meteoregik.db.schema import computed_indicators, ru_regions, stations
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,28 @@ def load_directory_stations(engine: Engine) -> list[StationChoice]:
         select(stations.c.wmo_index, stations.c.name, ru_regions.c.region)
         .select_from(stations.outerjoin(ru_regions, _REGION_JOIN))
         .where(stations.c.wmo_index.is_not(None))
+    )
+    with engine.connect() as conn:
+        return _sorted([StationChoice(*row) for row in conn.execute(stmt)])
+
+
+def load_stations_with_computed_indicators(engine: Engine) -> list[StationChoice]:
+    """Станции, по которым реально есть посчитанные агрегаты в
+    computed_indicators — для фильтра экрана "Просмотр агрегатных данных".
+    В отличие от load_stations_in_table (rp5_readings/gg_readings), у
+    computed_indicators нет своего кэшированного station_name — имя всегда
+    из справочника; станции без записи в справочнике (гипотетически
+    возможно, если её потом удалили оттуда) показываются просто индексом."""
+    present = (
+        select(computed_indicators.c.wmo_index)
+        .where(computed_indicators.c.wmo_index.is_not(None))
+        .group_by(computed_indicators.c.wmo_index)
+        .subquery()
+    )
+    stmt = select(present.c.wmo_index, stations.c.name, ru_regions.c.region).select_from(
+        present.outerjoin(stations, stations.c.wmo_index == present.c.wmo_index).outerjoin(
+            ru_regions, _REGION_JOIN
+        )
     )
     with engine.connect() as conn:
         return _sorted([StationChoice(*row) for row in conn.execute(stmt)])

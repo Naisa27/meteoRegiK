@@ -11,12 +11,13 @@ static/meteo_1.png (прозрачный фон) как единственный
 hero-изображения. У всех подписей явно прозрачный фон — иначе Qt-стиль
 подсвечивает QLabel своим цветом, который отличается от фона виджета.
 
-Виджет не знает про ImportDialog/DataBrowserDialog/engine напрямую (чисто
-декоративный экран) — при клике на кнопки испускает import_requested /
-data_browser_requested, MainWindow сам решает, что делать. Обе кнопки на
-одной строке под часами — "Импорт данных" (акцент — урожайное золото) и
-"Просмотр исходных данных" (второй акцент — пасмурно-небесный синий, та же пара
-цветов, что в theme.py)."""
+Виджет не знает про ImportDialog/DataBrowserDialog/AggregateViewDialog/engine
+напрямую (чисто декоративный экран) — при клике на кнопки испускает
+import_requested / data_browser_requested / aggregate_view_requested,
+MainWindow сам решает, что делать. Три кнопки на одной строке под часами —
+"Импорт данных" (акцент — урожайное золото), "Просмотр исходных данных"
+(второй акцент — пасмурно-небесный синий) и "Просмотр агрегатных данных"
+(третий акцент — травяной зелёный), все три пары цветов из theme.py."""
 
 from __future__ import annotations
 
@@ -53,6 +54,7 @@ def _format_date_ru(now: datetime) -> str:
 class GreetingWidget(QWidget):
     import_requested = Signal()
     data_browser_requested = Signal()
+    aggregate_view_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -118,22 +120,45 @@ class GreetingWidget(QWidget):
         button_row = QHBoxLayout()
         button_row.setSpacing(16)
 
-        import_btn = QPushButton("Импорт данных")
-        import_btn.setStyleSheet(theme.PRIMARY_BUTTON_QSS)
-        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn = self._accent_button("Импорт данных", theme.PRIMARY_BUTTON_QSS)
         import_btn.clicked.connect(self.import_requested.emit)
         button_row.addWidget(import_btn)
 
-        data_browser_btn = QPushButton("Просмотр исходных данных")
-        data_browser_btn.setStyleSheet(theme.SKY_BUTTON_QSS)
-        data_browser_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        data_browser_btn = self._accent_button("Просмотр исходных данных", theme.SKY_BUTTON_QSS)
         data_browser_btn.clicked.connect(self.data_browser_requested.emit)
         button_row.addWidget(data_browser_btn)
+
+        aggregate_view_btn = self._accent_button("Просмотр агрегатных данных", theme.GRASS_BUTTON_QSS)
+        aggregate_view_btn.clicked.connect(self.aggregate_view_requested.emit)
+        button_row.addWidget(aggregate_view_btn)
 
         layout.addLayout(button_row)
         layout.setAlignment(button_row, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(1)
+
+    def _accent_button(self, text: str, qss: str) -> QPushButton:
+        """Кнопка с заливным акцентом (см. theme.py::_filled_button_qss).
+
+        `:focus` в BUTTON_QSS утяжеляет шрифт 600 -> 700 (видимый фокус не
+        только цветом), а на реальных Windows-шрифтах (Segoe UI) вес 700
+        рендерится на несколько пикселей шире того же текста. sizeHint()
+        кнопки при этом всегда считается под базовый вес 600 — стилевой
+        каскад Qt переопределяет фактический QFont виджета при полировке
+        стиля, так что явно выставленный программно жирный QFont эффекта не
+        даёт (проверено: `button.font().weight()` после `setFont(Bold)`
+        всё равно возвращает 600). А увеличение padding в QSS тоже не
+        помогает: sizeHint = ширина_текста(600) + 2*padding, то есть область
+        под текст всегда точно равна ширине текста веса 600, каким бы ни был
+        padding — лишнего места изнутри не появляется. Поэтому запас — явный
+        minimumWidth сверх sizeHint; у самой длинной подписи ("Просмотр
+        агрегатных данных") без него в фокусе обрезались первая и последняя
+        буквы (правка 2026-09-23)."""
+        button = QPushButton(text)
+        button.setStyleSheet(qss)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setMinimumWidth(button.sizeHint().width() + 20)
+        return button
 
     def _tick(self) -> None:
         now = datetime.now()
