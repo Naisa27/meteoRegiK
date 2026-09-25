@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QElapsedTimer, QEventLoop, QStandardPaths, Qt, QThread, QThreadPool, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QPushButton, QWidget
 
 from meteoregik.db.migrations import run_migrations
@@ -15,7 +16,7 @@ from meteoregik.db.schema import computed_indicators, ru_regions, stations
 from meteoregik.db.session import get_engine
 from meteoregik.preferences import Preferences
 from meteoregik.reports.parameters import PARAMETER_LABELS
-from meteoregik.ui.query_panel import AggregateViewDialog, _ParametersDialog
+from meteoregik.ui.query_panel import AggregateViewDialog, _ParametersDialog, suggest_export_filename
 
 WMO_INDEX = 27704
 
@@ -72,11 +73,26 @@ def _make_engine(tmp_path):
 def _dialog(tmp_path, prefs=None):
     _qapp()
     engine = _make_engine(tmp_path)
-    return engine, AggregateViewDialog(engine, preferences=prefs or Preferences(None))
+    return engine, AggregateViewDialog(engine, preferences=prefs or Preferences(None), run_async=False)
 
 
 def _select_station(dialog):
     dialog.station_combo.select_wmo(WMO_INDEX)
+
+
+def _rows(dialog) -> int:
+    model = dialog.table.model()
+    return 0 if model is None else model.rowCount()
+
+
+def _cols(dialog) -> int:
+    model = dialog.table.model()
+    return 0 if model is None else model.columnCount()
+
+
+def _text(dialog, row, col) -> str:
+    model = dialog.table.model()
+    return model.data(model.index(row, col))
 
 
 # --- открытие экрана ---
@@ -120,7 +136,7 @@ def test_dialog_resizes_to_match_parent_window(tmp_path):
     engine = _make_engine(tmp_path)
     parent = QWidget()
     parent.resize(1234, 876)
-    dialog = AggregateViewDialog(engine, parent, preferences=Preferences(None))
+    dialog = AggregateViewDialog(engine, parent, preferences=Preferences(None), run_async=False)
     assert dialog.size() == parent.size()
 
 
@@ -180,7 +196,7 @@ def test_apply_empty_period_uses_full_station_bounds_and_fills_table(tmp_path, m
     dialog.apply_btn.click()
 
     assert messages == []
-    assert dialog.table.rowCount() > 0
+    assert _rows(dialog) > 0
     assert dialog.export_btn.isEnabled()
     assert dialog._stack.currentWidget() is dialog.table
 
@@ -191,12 +207,9 @@ def test_apply_detailed_mode_places_day_and_decade_values(tmp_path):
     dialog.apply_btn.click()
 
     # строка "t средняя" января 2020 должна содержать день 1 (-8.11)
-    found = False
-    for row in range(dialog.table.rowCount()):
-        item = dialog.table.item(row, 0)
-        if item is not None and item.text() == "t средняя" and dialog.table.item(row, 1) is not None:
-            if dialog.table.item(row, 1).text() == "-8.11":
-                found = True
+    found = any(
+        _text(dialog, row, 0) == "t средняя" and _text(dialog, row, 1) == "-8.11" for row in range(_rows(dialog))
+    )
     assert found
 
 
@@ -207,7 +220,7 @@ def test_apply_monthly_mode_switches_table_layout(tmp_path):
 
     dialog.apply_btn.click()
 
-    assert dialog.table.columnCount() == 14  # показатель + 12 месяцев + "за год"
+    assert _cols(dialog) == 14  # показатель + 12 месяцев + "за год"
 
 
 def test_apply_yearly_mode_switches_table_layout(tmp_path):
@@ -219,7 +232,7 @@ def test_apply_yearly_mode_switches_table_layout(tmp_path):
 
     dialog.apply_btn.click()
 
-    assert dialog.table.columnCount() == 3  # показатель + 2020 + 2021
+    assert _cols(dialog) == 3  # показатель + 2020 + 2021
 
 
 def test_apply_chart_mode_plots_and_switches_stack(tmp_path):
@@ -313,7 +326,7 @@ def test_preferences_are_restored_on_reopen_except_station(tmp_path):
 
     dialog.apply_btn.click()
 
-    reopened = AggregateViewDialog(engine, preferences=prefs)
+    reopened = AggregateViewDialog(engine, preferences=prefs, run_async=False)
     # станция — требование 2026-09-23, п.7: НЕ запоминается, поле пустое
     assert reopened.station_combo.currentText() == ""
     assert reopened._selected_parameter_keys == {("T", "avg"), ("T", "max")}
@@ -349,5 +362,255 @@ def test_export_writes_xlsx_file(tmp_path, monkeypatch, messages):
 
     assert out_path.exists()
     wb = openpyxl.load_workbook(out_path)
-    assert wb.sheetnames == ["Данные", "График"]
+    assert wb.sheetnames == ["Данные", "График", "Данные для графика"]
     assert ("info", "Файл сохранён.") in messages
+
+
+# --- когда какой фильтр применяется (корректировки 2026-09-25, п.7) ---
+
+
+def test_output_mode_change_after_apply_rebuilds_table_without_apply(tmp_path):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.apply_btn.click()
+    assert _cols(dialog) == 36
+
+    dialog.monthly_radio.setChecked(True)
+
+    assert _cols(dialog) == 14
+
+
+def test_view_kind_change_after_apply_switches_immediately(tmp_path):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.apply_btn.click()
+
+    dialog.chart_radio.setChecked(True)
+
+    assert dialog._stack.currentWidget() is dialog.chart_view
+    assert len(dialog.chart_view._ax.get_lines()) == 3
+
+
+def test_display_options_before_first_apply_do_not_build_results(tmp_path, messages):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+
+    dialog.monthly_radio.setChecked(True)
+    dialog.chart_radio.setChecked(True)
+
+    assert _rows(dialog) == 0
+    assert not dialog.export_btn.isEnabled()
+    assert messages == []
+
+
+def test_period_change_is_not_applied_until_apply_clicked(tmp_path):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.yearly_radio.setChecked(True)
+    dialog.date_from_edit.set_date(date(2020, 1, 1))
+    dialog.date_to_edit.set_date(date(2021, 12, 31))
+    dialog.apply_btn.click()
+    assert _cols(dialog) == 3  # показатель + 2020 + 2021
+
+    # новый период без "Применить" — смена типа вывода берёт старый период
+    dialog.date_to_edit.set_date(date(2020, 12, 31))
+    dialog.monthly_radio.setChecked(True)
+    dialog.yearly_radio.setChecked(True)
+
+    assert _cols(dialog) == 3
+
+
+def test_parameters_applied_on_done_without_apply(tmp_path, monkeypatch):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.yearly_radio.setChecked(True)
+    dialog.apply_btn.click()
+    assert _rows(dialog) == 4  # шапка + 3 показателя
+
+    def fake_exec(self):
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            key = item.data(Qt.ItemDataRole.UserRole)
+            item.setCheckState(Qt.CheckState.Checked if key == ("T", "avg") else Qt.CheckState.Unchecked)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(_ParametersDialog, "exec", fake_exec)
+    dialog.params_btn.click()
+
+    assert _rows(dialog) == 2  # шапка + "t средняя"
+
+
+def test_parameters_dialog_done_with_empty_selection_stays_open():
+    _qapp()
+    dialog = _ParametersDialog(selected=set())
+    dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert not dialog.error_label.isHidden()
+
+
+# --- раскладка (корректировки 2026-09-25, п.1) ---
+
+
+def test_station_title_and_export_button_share_one_row(tmp_path):
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.apply_btn.click()
+    dialog.show()
+    QApplication.processEvents()
+
+    label_center = dialog._station_label.geometry().center().y()
+    button_center = dialog.export_btn.geometry().center().y()
+    assert abs(label_center - button_center) <= 2
+    dialog.close()
+
+
+# --- корректировки 2026-09-25 (вторая партия) ---
+
+
+def test_export_suggests_descriptive_filename_in_downloads(tmp_path, monkeypatch, messages):
+    # п.4: при выгрузке предлагается понятное имя файла.
+    _, dialog = _dialog(tmp_path)
+    _select_station(dialog)
+    dialog.monthly_radio.setChecked(True)
+    dialog.date_from_edit.set_date(date(2020, 1, 1))
+    dialog.date_to_edit.set_date(date(2021, 12, 31))
+    dialog.apply_btn.click()
+
+    proposed = []
+
+    def fake_save(parent, caption, directory, *a, **k):
+        proposed.append(directory)
+        return "", ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_save)
+    dialog.export_btn.click()
+
+    assert Path(proposed[0]).name == "Мосальск (27704) — таблица, помесячно — 01.01.2020–31.12.2021.xlsx"
+    downloads = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+    assert Path(proposed[0]).parent == Path(downloads)  # по умолчанию — "Загрузки"
+
+
+def test_export_remembers_folder_for_next_time(tmp_path, monkeypatch, messages):
+    prefs = Preferences(tmp_path / "prefs.json")
+    _, dialog = _dialog(tmp_path, prefs)
+    _select_station(dialog)
+    dialog.apply_btn.click()
+    out_dir = tmp_path / "выгрузки"
+    out_dir.mkdir()
+
+    proposed = []
+
+    def fake_save(parent, caption, directory, *a, **k):
+        proposed.append(directory)
+        return str(out_dir / "result.xlsx"), ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_save)
+    dialog.export_btn.click()
+    dialog.export_btn.click()
+
+    assert Path(proposed[1]).parent == out_dir
+
+
+@pytest.mark.parametrize(
+    ("station", "view", "mode", "expected"),
+    [
+        ("Мосальск", "chart", "yearly", "Мосальск (27704) — график, по годам — 01.01.2020–31.12.2021.xlsx"),
+        ('Ст. "Южная"/2', "table", "detailed", "Ст. _Южная__2 (27704) — таблица, подробно по дням — 01.01.2020–31.12.2021.xlsx"),
+    ],
+)
+def test_suggest_export_filename(station, view, mode, expected):
+    assert suggest_export_filename(station, 27704, view, mode, date(2020, 1, 1), date(2021, 12, 31)) == expected
+
+
+def test_dialog_has_minimize_and_maximize_buttons(tmp_path):
+    # п.3: кнопки "свернуть"/"развернуть" в заголовке окна.
+    _, dialog = _dialog(tmp_path)
+    flags = dialog.windowFlags()
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint
+    assert flags & Qt.WindowType.WindowMaximizeButtonHint
+    assert flags & Qt.WindowType.WindowCloseButtonHint
+
+
+def test_minimizing_dialog_minimizes_owner_window(tmp_path):
+    _qapp()
+    engine = _make_engine(tmp_path)
+    owner = QWidget()
+    owner.show()
+    dialog = AggregateViewDialog(engine, owner, preferences=Preferences(None), run_async=False)
+    dialog.show()
+    QApplication.processEvents()
+
+    dialog.setWindowState(Qt.WindowState.WindowMinimized)
+    QApplication.processEvents()
+
+    assert owner.isMinimized()
+    assert not dialog.isMinimized()
+    dialog.close()
+    owner.close()
+
+
+def test_buttons_reserve_width_for_bold_focus_font(tmp_path):
+    # п.2: в фокусе подпись "Экспорт в Excel" не должна обрезаться.
+    _, dialog = _dialog(tmp_path)
+    for button in (dialog.export_btn, dialog.apply_btn, dialog.params_btn):
+        assert button.minimumWidth() >= button.sizeHint().width() + 20
+
+
+def test_loader_is_shown_while_results_are_built(tmp_path, monkeypatch):
+    # п.6: пока идёт выборка, поверх результата виден лоадер.
+    import meteoregik.ui.query_panel as query_panel
+
+    _, dialog = _dialog(tmp_path)
+    dialog.show()
+    _select_station(dialog)
+    seen = []
+    original = query_panel.build_results
+
+    def spy(*args, **kwargs):
+        seen.append(dialog.loading_overlay.isVisible())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(query_panel, "build_results", spy)
+    dialog.apply_btn.click()
+
+    assert seen == [True]
+    assert not dialog.loading_overlay.isVisible()
+    assert "Загрузка данных" in dialog.loading_overlay.label.text()
+    dialog.close()
+
+
+def _wait_until(predicate, timeout_ms=5000):
+    loop = QEventLoop()
+    deadline = QElapsedTimer()
+    deadline.start()
+    while not predicate() and deadline.elapsed() < timeout_ms:
+        QTimer.singleShot(10, loop.quit)
+        loop.exec()
+    return predicate()
+
+
+def test_background_loading_delivers_last_request_in_gui_thread(tmp_path, monkeypatch):
+    # Фоновый режим: результат приходит в GUI-поток; если пока грузилось,
+    # переключили тип вывода — показывается результат последнего запроса.
+    import meteoregik.ui.query_panel as query_panel
+
+    _qapp()
+    engine = _make_engine(tmp_path)
+    dialog = AggregateViewDialog(engine, preferences=Preferences(None), run_async=True)
+    _select_station(dialog)
+    shown_in = []
+    original_show = dialog._show_results
+
+    def spy_show(*args, **kwargs):
+        shown_in.append(QThread.currentThread() is QApplication.instance().thread())
+        return original_show(*args, **kwargs)
+
+    monkeypatch.setattr(dialog, "_show_results", spy_show)
+    dialog.apply_btn.click()
+    dialog.monthly_radio.setChecked(True)
+
+    assert _wait_until(lambda: not dialog.loading_overlay.isVisible() and shown_in)
+    assert shown_in == [True]  # первый (устаревший) результат отброшен
+    assert _cols(dialog) == 14  # помесячно
+    assert dialog.export_btn.isEnabled()
+    QThreadPool.globalInstance().waitForDone()

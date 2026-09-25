@@ -52,6 +52,9 @@ BORDER = "#D7DEE3"
 INPUT_BG = "#FFFFFF"
 INPUT_BG_READONLY = "#EEF2F4"
 SUCCESS = "#3B7A3B"
+# Текст ошибки рядом с полем — тот же красный, что у кнопки "удалить"
+# (BUTTON_QSS#danger), контраст к BG ≈ 6.7:1.
+ERROR_TEXT = "#A03030"
 # Шапка таблиц — светло-голубой тон в паре с ACCENT_SKY
 HEADER_BG = "#DCE7EE"
 HEADER_BORDER = "#C3D2DB"

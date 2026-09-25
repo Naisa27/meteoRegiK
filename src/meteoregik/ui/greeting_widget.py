@@ -29,6 +29,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from meteoregik.resources import LOGO_PATH
 from meteoregik.ui import theme
+from meteoregik.ui.buttons import reserve_focus_width
 
 _WEEKDAYS_RU = [
     "понедельник", "вторник", "среда", "четверг",
@@ -138,26 +139,12 @@ class GreetingWidget(QWidget):
         layout.addStretch(1)
 
     def _accent_button(self, text: str, qss: str) -> QPushButton:
-        """Кнопка с заливным акцентом (см. theme.py::_filled_button_qss).
-
-        `:focus` в BUTTON_QSS утяжеляет шрифт 600 -> 700 (видимый фокус не
-        только цветом), а на реальных Windows-шрифтах (Segoe UI) вес 700
-        рендерится на несколько пикселей шире того же текста. sizeHint()
-        кнопки при этом всегда считается под базовый вес 600 — стилевой
-        каскад Qt переопределяет фактический QFont виджета при полировке
-        стиля, так что явно выставленный программно жирный QFont эффекта не
-        даёт (проверено: `button.font().weight()` после `setFont(Bold)`
-        всё равно возвращает 600). А увеличение padding в QSS тоже не
-        помогает: sizeHint = ширина_текста(600) + 2*padding, то есть область
-        под текст всегда точно равна ширине текста веса 600, каким бы ни был
-        padding — лишнего места изнутри не появляется. Поэтому запас — явный
-        minimumWidth сверх sizeHint; у самой длинной подписи ("Просмотр
-        агрегатных данных") без него в фокусе обрезались первая и последняя
-        буквы (правка 2026-09-23)."""
+        """Кнопка с заливным акцентом (см. theme.py::_filled_button_qss) и
+        запасом ширины под жирный шрифт фокуса (ui/buttons.py)."""
         button = QPushButton(text)
         button.setStyleSheet(qss)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setMinimumWidth(button.sizeHint().width() + 20)
+        reserve_focus_width(button)
         return button
 
     def _tick(self) -> None:

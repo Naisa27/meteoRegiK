@@ -15,3 +15,11 @@ def test_label_for_known_parameter() -> None:
 
 def test_label_for_unknown_parameter_falls_back_to_key() -> None:
     assert label_for(("RRR", "sum")) == "RRR/sum"
+
+
+def test_value_axis_title_names_single_quantity_or_falls_back() -> None:
+    from meteoregik.reports.parameters import value_axis_title
+
+    assert value_axis_title([("T", "avg"), ("T", "max")]) == "Температура, °C"
+    assert value_axis_title([("T", "avg"), ("RRR", "sum")]) == "Значение"
+    assert value_axis_title([("RRR", "sum")]) == "Значение"

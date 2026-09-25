@@ -27,3 +27,22 @@ def label_for(key: ParamKey) -> str:
     """Человекочитаемое название показателя; для ещё не зарегистрированного
     ключа — сам ключ в виде "parameter/stat_type" (не падать в UI)."""
     return PARAMETER_LABELS.get(key, f"{key[0]}/{key[1]}")
+
+
+# Название величины для подписи оси значений на графике — по parameter
+# (не stat_type: средняя/мин/макс температуры — одна и та же ось).
+PARAMETER_QUANTITIES: dict[str, str] = {
+    "T": "Температура, °C",
+}
+
+
+def value_axis_title(parameters: list[ParamKey]) -> str:
+    """Подпись оси значений: название величины, если все выбранные
+    показатели — одна величина, иначе нейтральное "Значение" (разные
+    единицы на одной оси подписать одной величиной нельзя)."""
+    quantities = {PARAMETER_QUANTITIES.get(parameter) for parameter, _ in parameters}
+    if len(quantities) == 1:
+        (quantity,) = quantities
+        if quantity is not None:
+            return quantity
+    return "Значение"

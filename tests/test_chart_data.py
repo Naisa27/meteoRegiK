@@ -41,3 +41,16 @@ def test_chart_data_from_yearly_one_point_per_year() -> None:
 def test_chart_data_from_yearly_missing_year_gives_none() -> None:
     chart = chart_data_from_yearly({2020: {AVG: 5.9}}, [2020, 2022], PARAMETERS)
     assert chart.series[AVG] == [5.9, None]
+
+
+def test_chart_data_x_title_follows_granularity() -> None:
+    # Подпись оси X графика в Excel (правка 2026-09-25, п.1).
+    from meteoregik.reports.chart_data import (
+        chart_data_from_detailed,
+        chart_data_from_monthly,
+        chart_data_from_yearly,
+    )
+
+    assert chart_data_from_detailed([], []).x_title == "Дата"
+    assert chart_data_from_monthly([], []).x_title == "Месяц"
+    assert chart_data_from_yearly({}, [], []).x_title == "Год"

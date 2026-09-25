@@ -56,10 +56,15 @@ class MainWindow(QMainWindow):
         """Окно по центру доступной области экрана (без панели задач). Без
         этого Windows ставит новое окно у левого верхнего угла. Если окно
         больше экрана — сначала сжимается до его размеров."""
+        # Нативное окно создаётся ДО расчёта размера: при создании оно может
+        # оказаться на мониторе с другим масштабом (например, ноутбук 125% +
+        # монитор 100%), и Qt пересчитал бы уже заданный размер под этот
+        # масштаб — окно становилось больше экрана (1920 -> 2400). Заодно
+        # только у нативного окна известна ширина рамки/заголовка.
+        self.winId()
         screen = self.screen() or QApplication.primaryScreen()
         available = screen.availableGeometry()
         self.resize(min(self.width(), available.width()), min(self.height(), available.height()))
-        self.winId()  # создаёт нативное окно — только тогда известна ширина рамки/заголовка
         frame = self.frameGeometry()
         frame.moveCenter(available.center())
         self.move(max(frame.left(), available.left()), max(frame.top(), available.top()))
