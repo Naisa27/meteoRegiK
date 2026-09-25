@@ -485,7 +485,7 @@ def test_add_dialog_rejects_station_not_in_directory(tmp_path, messages):
     assert add.result_values is None
     assert messages == [("warning", data_browser.STATION_NOT_FOUND_MESSAGE)]
     assert "не существует в текущем справочнике метеостанций" in messages[0][1]
-    assert "внесите новую станцию в справочник и повторите попытку" in messages[0][1]
+    assert "внесите новую станцию в справочник (кнопка «Справочник станций» на главном экране)" in messages[0][1]
 
 
 def test_add_dialog_requires_station_hour_and_valid_date(tmp_path, messages):

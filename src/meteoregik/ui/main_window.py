@@ -8,6 +8,7 @@ from meteoregik.ui.data_browser import DataBrowserDialog
 from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
+from meteoregik.ui.station_directory import StationDirectoryDialog
 
 
 class MainWindow(QMainWindow):
@@ -35,6 +36,7 @@ class MainWindow(QMainWindow):
         greeting.import_requested.connect(self._open_import_dialog)
         greeting.data_browser_requested.connect(self._open_data_browser)
         greeting.aggregate_view_requested.connect(self._open_aggregate_view)
+        greeting.station_directory_requested.connect(self._open_station_directory)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
         self._initial_focus_set = False
@@ -79,4 +81,8 @@ class MainWindow(QMainWindow):
 
     def _open_aggregate_view(self) -> None:
         dialog = AggregateViewDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_station_directory(self) -> None:
+        dialog = StationDirectoryDialog(self.engine, self)
         dialog.exec()

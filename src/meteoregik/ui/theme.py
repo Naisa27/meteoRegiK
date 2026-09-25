@@ -237,6 +237,35 @@ QTableCornerButton::section {{
     border-right: 1px solid {HEADER_BORDER};
     border-bottom: 1px solid {HEADER_BORDER};
 }}
+QTabWidget::pane {{
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    top: -1px;
+    background: transparent;
+}}
+QTabBar::tab {{
+    background: transparent;
+    color: {TEXT_SECONDARY};
+    font-weight: 600;
+    padding: 8px 18px;
+    margin-right: 4px;
+    border: none;
+    border-bottom: 3px solid transparent;
+}}
+QTabBar::tab:hover {{
+    color: {TEXT_PRIMARY};
+}}
+QTabBar::tab:selected {{
+    color: {TEXT_PRIMARY};
+    border-bottom: 3px solid {ACCENT_SKY};
+}}
+QTabBar::tab:focus {{
+    background: {HEADER_BG};
+    border-radius: 6px;
+}}
+QTableView {{
+    alternate-background-color: #F9FBFC;
+}}
 QLineEdit:read-only {{
     background: {INPUT_BG_READONLY};
     color: {TEXT_SECONDARY};

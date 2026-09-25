@@ -97,3 +97,17 @@ def test_no_button_has_focus_ring_at_startup():
     assert not isinstance(window.focusWidget(), QPushButton)
     window.close()
 
+
+
+def test_station_directory_button_opens_station_directory_dialog():
+    _qapp()
+    engine = get_engine(":memory:")
+    window = MainWindow(engine)
+
+    with patch("meteoregik.ui.main_window.StationDirectoryDialog") as mock_dialog_cls:
+        buttons = window.centralWidget().findChildren(QPushButton)
+        directory_btn = next(b for b in buttons if b.text() == "Справочник станций")
+        directory_btn.click()
+
+    mock_dialog_cls.assert_called_once_with(engine, window)
+    mock_dialog_cls.return_value.exec.assert_called_once()

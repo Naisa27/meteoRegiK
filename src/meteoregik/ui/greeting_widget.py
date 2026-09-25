@@ -17,7 +17,8 @@ import_requested / data_browser_requested / aggregate_view_requested,
 MainWindow сам решает, что делать. Три кнопки на одной строке под часами —
 "Импорт данных" (акцент — урожайное золото), "Просмотр исходных данных"
 (второй акцент — пасмурно-небесный синий) и "Просмотр агрегатных данных"
-(третий акцент — травяной зелёный), все три пары цветов из theme.py."""
+(третий акцент — травяной зелёный), все три пары цветов из theme.py. Под
+ними — неброская кнопка "Справочник станций" (station_directory_requested)."""
 
 from __future__ import annotations
 
@@ -56,6 +57,7 @@ class GreetingWidget(QWidget):
     import_requested = Signal()
     data_browser_requested = Signal()
     aggregate_view_requested = Signal()
+    station_directory_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -135,6 +137,18 @@ class GreetingWidget(QWidget):
 
         layout.addLayout(button_row)
         layout.setAlignment(button_row, Qt.AlignmentFlag.AlignHCenter)
+
+        # Справочник нужен редко — неброская кнопка без заливки под основным
+        # рядом, не спорит с тремя главными действиями (решение пользователя
+        # 2026-09-25). Свой стиль обязателен: фон виджета задан правилом без
+        # селектора и иначе закрасил бы кнопку целиком.
+        layout.addSpacing(14)
+        directory_btn = QPushButton("Справочник станций")
+        directory_btn.setStyleSheet(theme.BUTTON_QSS)
+        directory_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        reserve_focus_width(directory_btn)
+        directory_btn.clicked.connect(self.station_directory_requested.emit)
+        layout.addWidget(directory_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         layout.addStretch(1)
 
