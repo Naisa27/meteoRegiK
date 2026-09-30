@@ -14,17 +14,17 @@ hero-изображения. У всех подписей явно прозра�
 Виджет не знает про ImportDialog/DataBrowserDialog/AggregateViewDialog/engine
 напрямую (чисто декоративный экран) — при клике на кнопки испускает
 import_requested / data_browser_requested / aggregate_view_requested,
-MainWindow сам решает, что делать. Три кнопки на одной строке под часами —
-"Импорт данных" (акцент — урожайное золото), "Просмотр исходных данных"
-(второй акцент — пасмурно-небесный синий) и "Просмотр агрегатных данных"
-(третий акцент — травяной зелёный), все три пары цветов из theme.py. Под
-ними — неброская кнопка "Справочник станций" (station_directory_requested)."""
+MainWindow сам решает, что делать. Кнопки — тремя рядами по разделам
+(правка 2026-09-30), у каждого ряда подпись и своя гамма из theme.py:
+"Работа с данными" (оттенки синего — импорт, просмотр исходных и агрегатных
+данных), "Расчёт показателей" (зелёные, кнопок пока нет) и "Справочники"
+(тёмное золото, station_directory_requested)."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal, SignalInstance
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -120,46 +120,72 @@ class GreetingWidget(QWidget):
 
         layout.addSpacing(32)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(16)
+        # Три ряда кнопок по разделам работы (правка 2026-09-30): у каждого
+        # ряда подпись и своя цветовая гамма (theme.*_ROW_COLORS), у кнопок
+        # внутри ряда — разные оттенки этой гаммы. Раздел угадывается не
+        # только по цвету, но и по подписи над рядом.
+        data_row = self._button_row(
+            layout, "Работа с данными", theme.DATA_ROW_TITLE,
+            [
+                ("Импорт данных", self.import_requested),
+                ("Просмотр исходных данных", self.data_browser_requested),
+                ("Просмотр агрегатных данных", self.aggregate_view_requested),
+            ],
+            theme.DATA_ROW_COLORS,
+        )
+        layout.addLayout(data_row)
+        layout.addSpacing(18)
 
-        import_btn = self._accent_button("Импорт данных", theme.PRIMARY_BUTTON_QSS)
-        import_btn.clicked.connect(self.import_requested.emit)
-        button_row.addWidget(import_btn)
+        # Расчётных экранов пока нет (в ТЗ не описаны) — ряд обозначен, чтобы
+        # раскладка главного окна не менялась, когда они появятся.
+        calc_row = self._button_row(layout, "Расчёт показателей", theme.CALC_ROW_TITLE, [], theme.CALC_ROW_COLORS)
+        placeholder = QLabel("Раздел в разработке")
+        placeholder.setFont(QFont("Segoe UI", 10))
+        placeholder.setStyleSheet(f"color: {_TEXT_SECONDARY}; background: transparent; font-style: italic;")
+        calc_row.addWidget(placeholder)
+        layout.addLayout(calc_row)
+        layout.addSpacing(18)
 
-        data_browser_btn = self._accent_button("Просмотр исходных данных", theme.SKY_BUTTON_QSS)
-        data_browser_btn.clicked.connect(self.data_browser_requested.emit)
-        button_row.addWidget(data_browser_btn)
-
-        aggregate_view_btn = self._accent_button("Просмотр агрегатных данных", theme.GRASS_BUTTON_QSS)
-        aggregate_view_btn.clicked.connect(self.aggregate_view_requested.emit)
-        button_row.addWidget(aggregate_view_btn)
-
-        layout.addLayout(button_row)
-        layout.setAlignment(button_row, Qt.AlignmentFlag.AlignHCenter)
-
-        # Справочник нужен редко — неброская кнопка без заливки под основным
-        # рядом, не спорит с тремя главными действиями (решение пользователя
-        # 2026-09-25). Свой стиль обязателен: фон виджета задан правилом без
-        # селектора и иначе закрасил бы кнопку целиком.
-        layout.addSpacing(14)
-        directory_btn = QPushButton("Справочник станций")
-        directory_btn.setStyleSheet(theme.BUTTON_QSS)
-        directory_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        reserve_focus_width(directory_btn)
-        directory_btn.clicked.connect(self.station_directory_requested.emit)
-        layout.addWidget(directory_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        directory_row = self._button_row(
+            layout, "Работа со справочниками", theme.DIRECTORY_ROW_TITLE,
+            [("Справочники", self.station_directory_requested)],
+            theme.DIRECTORY_ROW_COLORS,
+        )
+        layout.addLayout(directory_row)
 
         layout.addStretch(1)
 
-    def _accent_button(self, text: str, qss: str) -> QPushButton:
-        """Кнопка с заливным акцентом (см. theme.py::_filled_button_qss) и
-        запасом ширины под жирный шрифт фокуса (ui/buttons.py)."""
-        button = QPushButton(text)
-        button.setStyleSheet(qss)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        reserve_focus_width(button)
-        return button
+    def _button_row(
+        self,
+        layout: QVBoxLayout,
+        title: str,
+        title_color: str,
+        buttons: list[tuple[str, SignalInstance]],
+        colors: tuple[str, ...],
+    ) -> QHBoxLayout:
+        """Подпись раздела + горизонтальный ряд заливных кнопок; i-я кнопка
+        получает i-й оттенок гаммы ряда. Подпись добавляется в layout сразу,
+        ряд возвращается — вызывающий может дополнить его до вставки."""
+        caption = QLabel(title.upper())
+        caption_font = QFont("Segoe UI", 9)
+        caption_font.setWeight(QFont.Weight.DemiBold)
+        caption_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
+        caption.setFont(caption_font)
+        caption.setStyleSheet(f"color: {title_color}; background: transparent;")
+        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(caption)
+
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        for (text, signal), color in zip(buttons, colors):
+            button = QPushButton(text)
+            button.setStyleSheet(theme.accent_button_qss(color))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            reserve_focus_width(button)
+            button.clicked.connect(signal.emit)
+            row.addWidget(button)
+        return row
 
     def _tick(self) -> None:
         now = datetime.now()

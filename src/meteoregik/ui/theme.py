@@ -147,6 +147,42 @@ PRIMARY_BUTTON_QSS = _filled_button_qss(ACCENT, ACCENT_HOVER, ACCENT_PRESSED, AC
 SKY_BUTTON_QSS = _filled_button_qss(ACCENT_SKY, ACCENT_SKY_HOVER, ACCENT_SKY_PRESSED, ACCENT_SKY_DISABLED)
 GRASS_BUTTON_QSS = _filled_button_qss(ACCENT_GRASS, ACCENT_GRASS_HOVER, ACCENT_GRASS_PRESSED, ACCENT_GRASS_DISABLED)
 
+
+def _scaled(hex_color: str, factor: float) -> str:
+    channels = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#" + "".join(f"{round(c * factor):02X}" for c in channels)
+
+
+def _mixed_with_white(hex_color: str, t: float) -> str:
+    channels = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#" + "".join(f"{round(c + (255 - c) * t):02X}" for c in channels)
+
+
+def accent_button_qss(base: str) -> str:
+    """Заливная кнопка по одному базовому цвету: hover/pressed/disabled —
+    той же формулой, что подобраны ACCENT_SKY/ACCENT_GRASS вручную
+    (затемнение ×0.81 и ×0.63, недоступная — смешение с белым)."""
+    return _filled_button_qss(base, _scaled(base, 0.81), _scaled(base, 0.63), _mixed_with_white(base, 0.55))
+
+
+# Ряды кнопок главного окна (правка 2026-09-30): каждый ряд — своя гамма,
+# кнопки внутри ряда — разные оттенки этой гаммы. Оттенки различаются в
+# основном тоном, а не светлотой: заливка должна держать и контраст ≥4.5:1 к
+# белому тексту, и ≥3:1 к кольцу фокуса FOCUS_RING — это коридор светлоты
+# шириной всего ~5.0–5.8:1 к белому, "светлая и тёмная" версии одного цвета в
+# него не помещаются (проверяется в tests/test_theme.py).
+# Ряд 1 "Работа с данными" — небо/вода: индиго, пасмурно-синий, морская волна.
+DATA_ROW_COLORS = ("#4B63B0", ACCENT_SKY, "#2A7480")
+DATA_ROW_TITLE = ACCENT_SKY
+# Ряд 2 "Расчёт показателей" — растительность (кнопок пока нет, гамма
+# зарезервирована): травяной, зелёно-бирюзовый, оливковый.
+CALC_ROW_COLORS = (ACCENT_GRASS, "#3E7258", "#5E6E2A")
+CALC_ROW_TITLE = ACCENT_GRASS
+# Ряд 3 "Справочники" — урожай: тёмное золото (ACCENT для белого текста
+# светловат — 3.2:1).
+DIRECTORY_ROW_COLORS = ("#94661C", "#8A5A2B", "#7C6A1E")
+DIRECTORY_ROW_TITLE = "#94661C"
+
 # Стили кнопок по objectName. Голый QPushButton (без objectName — например,
 # кнопки QMessageBox) выглядит как "secondary", чтобы все кнопки приложения
 # были в одном стиле и с одинаковой реакцией на нажатие.

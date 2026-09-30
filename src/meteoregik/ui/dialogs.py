@@ -4,7 +4,8 @@ QMessageBox ("Yes"/"No") без файлов перевода Qt остаютс�
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog, QMessageBox, QWidget
 
 
 def ask_yes_no(parent: QWidget | None, title: str, text: str) -> bool:
@@ -23,3 +24,16 @@ def ask_yes_no(parent: QWidget | None, title: str, text: str) -> bool:
     box.setEscapeButton(no_btn)
     box.exec()
     return box.clickedButton() is yes_btn
+
+
+def enable_min_max_buttons(dialog: QDialog) -> None:
+    """Кнопки "свернуть"/"развернуть" в заголовке большого экрана — у QDialog
+    по умолчанию только "?" и крестик. Размер окна после открытия меняется
+    независимо от главного окна."""
+    dialog.setWindowFlags(
+        Qt.WindowType.Window
+        | Qt.WindowType.WindowTitleHint
+        | Qt.WindowType.WindowSystemMenuHint
+        | Qt.WindowType.WindowMinMaxButtonsHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )

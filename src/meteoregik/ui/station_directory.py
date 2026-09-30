@@ -1,4 +1,5 @@
-"""Экран "Справочник станций": два таба.
+"""Экран "Справочники" (кнопка на главном окне; до 2026-09-30 — "Справочник
+станций"): два таба.
 
 (а) "Метеостанции" — фильтры (название, индекс ВМО, страна, регион РФ,
 "только без координат"), таблица с правкой прямо в ячейках, добавление
@@ -84,10 +85,11 @@ from meteoregik.stations.directory_importer import (
 from meteoregik.ui import theme
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
-from meteoregik.ui.dialogs import ask_yes_no
+from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons
 from meteoregik.ui.loading_overlay import LoadingOverlay
 
 ALL_COUNTRIES_TEXT = "Все страны"
+DEFAULT_COUNTRY = RUSSIA
 ALL_REGIONS_TEXT = "Все регионы"
 NO_REGION_TEXT = "— не указан —"
 WMO_LOCKED_TOOLTIP = "Индекс не меняется: по станции уже загружены данные, они привязаны к ней по индексу."
@@ -312,6 +314,15 @@ class StationsFilterProxy(QSortFilterProxyModel):
         return source.sort_key(left.row(), left.column()) < source.sort_key(right.row(), right.column())
 
 
+class RegionsSortProxy(QSortFilterProxyModel):
+    """Сортировка таблицы регионов по щелчку на заголовке (правка
+    2026-10-01): по коду, названию и дате изменения."""
+
+    def lessThan(self, left: QModelIndex | QPersistentModelIndex, right: QModelIndex | QPersistentModelIndex) -> bool:
+        source = self.sourceModel()
+        return source.sort_key(left.row(), left.column()) < source.sort_key(right.row(), right.column())  # type: ignore[attr-defined]
+
+
 class StationsDelegate(QStyledItemDelegate):
     """Страна — выбор из списка; регион российской станции — выбор из
     справочника регионов (код вручную не набирается); остальное — обычное
@@ -401,6 +412,18 @@ class RegionsTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole and field == "code":
             return "Код не меняется: по нему к региону привязаны станции."
         return None
+
+    def sort_key(self, row: int, column: int) -> tuple:
+        """Ключ сортировки по колонке: код — числом (а не строкой, иначе
+        "10" < "9"), название — без учёта регистра, "Изменено" — по времени,
+        никогда не менявшиеся регионы в конце."""
+        record = self.records[row]
+        field = self.COLUMNS[column][0]
+        if field == "code":
+            return (record.code,)
+        if field == "region":
+            return (record.region.casefold(), record.code)
+        return (record.updated_at is None, record.updated_at or datetime.min, record.code)
 
     def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
         base = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
@@ -597,7 +620,9 @@ class StationDirectoryDialog(QDialog):
         super().__init__(parent)
         self.engine = engine
         self._run_async = run_async
-        self.setWindowTitle("Справочник станций")
+        # Внутри два справочника — станции и регионы РФ (правка 2026-09-30).
+        self.setWindowTitle("Справочники")
+        enable_min_max_buttons(self)
         if parent is not None:
             self.resize(parent.size())
         else:
@@ -608,6 +633,8 @@ class StationDirectoryDialog(QDialog):
         self.stations_proxy = StationsFilterProxy(self)
         self.stations_proxy.setSourceModel(self.stations_model)
         self.regions_model = RegionsTableModel(engine, self)
+        self.regions_proxy = RegionsSortProxy(self)
+        self.regions_proxy.setSourceModel(self.regions_model)
 
         self._build_ui()
         self._reload_all()
@@ -714,6 +741,9 @@ class StationDirectoryDialog(QDialog):
         self.country_filter.addItem(ALL_COUNTRIES_TEXT, None)
         for code, name in _country_choices():
             self.country_filter.addItem(name, code)
+        # При открытии — только станции России (правка 2026-09-30): с ними
+        # работают чаще всего, остальные страны — выбором в этом же фильтре.
+        self.country_filter.setCurrentIndex(self.country_filter.findData(DEFAULT_COUNTRY))
         top_row.addWidget(self.country_filter)
         card_layout.addLayout(top_row)
 
@@ -728,7 +758,8 @@ class StationDirectoryDialog(QDialog):
         bottom_row.addStretch(1)
         self.reset_filters_btn = QPushButton("Сбросить фильтры")
         self.reset_filters_btn.setObjectName("secondary")
-        self.reset_filters_btn.clicked.connect(self._reset_filters)
+        # lambda: clicked передаёт checked=False, он попал бы в country
+        self.reset_filters_btn.clicked.connect(lambda: self._reset_filters())
         bottom_row.addWidget(self.reset_filters_btn)
         card_layout.addLayout(bottom_row)
 
@@ -747,14 +778,16 @@ class StationDirectoryDialog(QDialog):
 
         hint = QLabel(
             "Дважды щёлкните по названию региона, чтобы изменить его. Код не меняется: "
-            "по нему к региону привязаны станции."
+            "по нему к региону привязаны станции. Щелчок по заголовку столбца — сортировка."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
         layout.addWidget(hint)
 
         self.regions_table = QTableView()
-        self.regions_table.setModel(self.regions_model)
+        self.regions_table.setModel(self.regions_proxy)
+        self.regions_table.setSortingEnabled(True)
+        self.regions_table.sortByColumn(0, Qt.SortOrder.AscendingOrder)  # по коду, как в файле
         _configure_table(self.regions_table, stretch_column=1)  # "Регион"
         layout.addWidget(self.regions_table, stretch=1)
 
@@ -835,12 +868,14 @@ class StationDirectoryDialog(QDialog):
         )
         self._refresh_counts()
 
-    def _reset_filters(self) -> None:
+    def _reset_filters(self, country: str | None = DEFAULT_COUNTRY) -> None:
+        """Возврат к фильтрам как при открытии экрана (только Россия);
+        country=None — показать вообще все станции."""
         for widget in (self.name_filter, self.wmo_filter, self.country_filter, self.region_filter, self.missing_coordinates_check):
             widget.blockSignals(True)
         self.name_filter.clear()
         self.wmo_filter.clear()
-        self.country_filter.setCurrentIndex(0)
+        self.country_filter.setCurrentIndex(max(self.country_filter.findData(country), 0))
         self.region_filter.setCurrentIndex(0)
         self.region_filter.setEnabled(True)
         self.missing_coordinates_check.setChecked(False)
@@ -882,7 +917,8 @@ class StationDirectoryDialog(QDialog):
             return
         proxy_index = self.stations_proxy.mapFromSource(self.stations_model.index(row, 0))
         if not proxy_index.isValid():
-            self._reset_filters()
+            # Все страны: добавленная станция может быть и не российской.
+            self._reset_filters(country=None)
             proxy_index = self.stations_proxy.mapFromSource(self.stations_model.index(row, 0))
         self.stations_table.selectRow(proxy_index.row())
         self.stations_table.scrollTo(proxy_index)
@@ -893,8 +929,9 @@ class StationDirectoryDialog(QDialog):
             return
         self._reload_all()
         row = next(i for i, r in enumerate(self.regions_model.records) if r.code == dialog.added_code)
-        self.regions_table.selectRow(row)
-        self.regions_table.scrollTo(self.regions_model.index(row, 0))
+        proxy_index = self.regions_proxy.mapFromSource(self.regions_model.index(row, 0))
+        self.regions_table.selectRow(proxy_index.row())
+        self.regions_table.scrollTo(proxy_index)
         self._show_status(self.regions_status, f"Регион {dialog.added_code} добавлен.")
 
     # --- обновление из файла ---

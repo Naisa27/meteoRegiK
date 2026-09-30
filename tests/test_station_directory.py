@@ -72,15 +72,32 @@ def _proxy_index(dialog, wmo_index: int, column: int):
     raise AssertionError(f"станции {wmo_index} нет в таблице")
 
 
+def _show_all_countries(dialog) -> None:
+    dialog.country_filter.setCurrentIndex(dialog.country_filter.findData(None))
+
+
 # --- открытие и фильтры ---
 
 
-def test_opens_with_all_stations_sorted_by_name(dialog):
+def test_opens_with_russian_stations_sorted_by_name(dialog):
+    assert dialog.windowTitle() == "Справочники"
+    assert dialog.country_filter.currentData() == "ru"
+    assert _names(dialog) == ["Брянск", "Мосальск", "Новая", "Сухиничи"]
+    assert dialog.count_label.text() == "Показано 4 из 5"
+
+
+def test_has_minimize_and_maximize_buttons(dialog):
+    assert dialog.windowFlags() & Qt.WindowType.WindowMinMaxButtonsHint == Qt.WindowType.WindowMinMaxButtonsHint
+
+
+def test_all_countries_shows_every_station(dialog):
+    _show_all_countries(dialog)
     assert _names(dialog) == ["Брянск", "Минск", "Мосальск", "Новая", "Сухиничи"]
     assert dialog.count_label.text() == "Показано 5 из 5"
 
 
 def test_country_and_region_shown_by_name(dialog):
+    _show_all_countries(dialog)
     proxy = dialog.stations_proxy
     assert proxy.data(_proxy_index(dialog, 27704, 2)) == "Россия"
     assert proxy.data(_proxy_index(dialog, 27704, 3)) == "Калужская область"
@@ -88,6 +105,7 @@ def test_country_and_region_shown_by_name(dialog):
 
 
 def test_name_filter_is_case_insensitive_substring(dialog):
+    _show_all_countries(dialog)
     dialog.name_filter.setText("СК")
     assert _names(dialog) == ["Брянск", "Минск", "Мосальск"]
     assert dialog.count_label.text() == "Показано 3 из 5"
@@ -115,13 +133,15 @@ def test_missing_coordinates_filter_with_count(dialog):
     assert _names(dialog) == ["Новая"]
 
 
-def test_reset_filters(dialog):
+def test_reset_filters_returns_to_opening_state(dialog):
+    dialog.country_filter.setCurrentIndex(dialog.country_filter.findData("by"))
     dialog.name_filter.setText("xyz")
     dialog.missing_coordinates_check.setChecked(True)
     dialog.reset_filters_btn.click()
     assert dialog.name_filter.text() == ""
     assert not dialog.missing_coordinates_check.isChecked()
-    assert len(_names(dialog)) == 5
+    assert dialog.country_filter.currentData() == "ru"
+    assert len(_names(dialog)) == 4
 
 
 # --- правка ячеек ---
@@ -153,6 +173,7 @@ def test_wmo_index_locked_only_for_station_with_data(dialog):
 
 
 def test_region_editor_is_list_for_russia_and_text_elsewhere(dialog):
+    _show_all_countries(dialog)
     delegate = StationsDelegate(dialog.stations_table)
     option = QStyleOptionViewItem()
     ru_editor = delegate.createEditor(dialog.stations_table, option, _proxy_index(dialog, 99001, 3))
@@ -168,6 +189,7 @@ def test_region_editor_is_list_for_russia_and_text_elsewhere(dialog):
 
 
 def test_country_editor_resets_region(dialog):
+    _show_all_countries(dialog)  # иначе станция, ставшая белорусской, скрылась бы фильтром
     delegate = StationsDelegate(dialog.stations_table)
     editor = delegate.createEditor(dialog.stations_table, QStyleOptionViewItem(), _proxy_index(dialog, 27707, 2))
     editor.setCurrentIndex(editor.findData("by"))
@@ -267,7 +289,7 @@ def test_import_wrong_file_warns_and_changes_nothing(dialog, tmp_path, monkeypat
     dialog.import_stations_btn.click()
 
     assert len(messages) == 1 and "нет столбцов" in messages[0] and "Справочник не изменён" in messages[0]
-    assert len(_names(dialog)) == 5
+    assert dialog.count_label.text() == "Показано 4 из 5"
 
 
 def test_import_cancelled_at_confirmation(dialog, tmp_path, monkeypatch):
@@ -278,3 +300,19 @@ def test_import_cancelled_at_confirmation(dialog, tmp_path, monkeypatch):
     dialog.import_stations_btn.click()
 
     assert "Юхнов" not in _names(dialog)
+
+
+def test_regions_sortable_by_code_and_name(dialog, engine):
+    with engine.begin() as conn:
+        conn.execute(ru_regions.insert().values(code=9, region="Адыгея"))
+    dialog._reload_all()
+    proxy = dialog.regions_proxy
+
+    def column(index: int) -> list[str]:
+        return [proxy.data(proxy.index(row, index)) for row in range(proxy.rowCount())]
+
+    assert column(0) == ["9", "32", "40"]  # по умолчанию — по коду, числом, не строкой
+    dialog.regions_table.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+    assert column(1) == ["Адыгея", "Брянская область", "Калужская область"]
+    dialog.regions_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+    assert column(0) == ["40", "32", "9"]

@@ -106,7 +106,7 @@ def test_station_directory_button_opens_station_directory_dialog():
 
     with patch("meteoregik.ui.main_window.StationDirectoryDialog") as mock_dialog_cls:
         buttons = window.centralWidget().findChildren(QPushButton)
-        directory_btn = next(b for b in buttons if b.text() == "Справочник станций")
+        directory_btn = next(b for b in buttons if b.text() == "Справочники")
         directory_btn.click()
 
     mock_dialog_cls.assert_called_once_with(engine, window)

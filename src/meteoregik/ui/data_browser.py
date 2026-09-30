@@ -65,7 +65,7 @@ from meteoregik.preferences import Preferences
 from meteoregik.stations.choices import StationChoice, load_directory_stations, load_stations_in_table
 from meteoregik.ui import theme
 from meteoregik.ui.date_field import DateField, DateFieldError
-from meteoregik.ui.dialogs import ask_yes_no
+from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons
 from meteoregik.ui.station_combo import ALL_STATIONS_TEXT, StationCombo
 
 PAGE_SIZE = 100
@@ -77,7 +77,7 @@ MANUAL_ENTRY_SOURCE = "ручной ввод"  # source_file строк, доб�
 STATION_NOT_FOUND_MESSAGE = (
     "Такой станции не существует в текущем справочнике метеостанций. "
     "Проверьте правильность выбранной станции или внесите новую станцию в справочник "
-    "(кнопка «Справочник станций» на главном экране) и повторите попытку."
+    "(кнопка «Справочники» на главном экране) и повторите попытку."
 )
 
 # db-имя -> исходный код столбца rp5.ru (для заголовков таблицы), напр.
@@ -604,6 +604,7 @@ class DataBrowserDialog(QDialog):
         self.engine = engine
         self._preferences = preferences or Preferences.next_to_database(engine.url.database)
         self.setWindowTitle("Просмотр исходных данных")
+        enable_min_max_buttons(self)  # как у "Просмотра агрегатных данных"
         self.resize(1100, 640)
         self.setStyleSheet(theme.DIALOG_QSS)
 
@@ -637,6 +638,16 @@ class DataBrowserDialog(QDialog):
         layout.setSpacing(12)
 
         layout.addWidget(self._build_filter_card())
+
+        # Подсказка про правку в ячейках — как в "Справочниках" (правка
+        # 2026-09-30): без неё возможность редактирования не очевидна.
+        hint = QLabel(
+            "Дважды щёлкните по ячейке, чтобы изменить значение; расчётные показатели пересчитаются "
+            "автоматически. Станцию и файл-источник изменить нельзя."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
+        layout.addWidget(hint)
 
         self.table = QTableView()
         self.table.setModel(self._model)

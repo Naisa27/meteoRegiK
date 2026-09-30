@@ -72,3 +72,33 @@ def test_focus_ring_does_not_change_button_size():
     assert "QPushButton#x:focus {border: 2px solid" in plain and "padding: 6px 18px;" in plain
     assert "QPushButton#y:focus {border: 2px solid" in bordered and "padding: 7px 19px;" in bordered
 
+
+
+def _contrast(first: str, second: str) -> float:
+    lighter, darker = sorted((_relative_luminance(first), _relative_luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_main_window_row_colors_keep_text_and_focus_ring_contrast():
+    """Все оттенки рядов кнопок главного окна: белый текст ≥4.5:1, кольцо
+    фокуса ≥3:1 к заливке; подпись ряда ≥4.5:1 к фону окна."""
+    for colors, title in (
+        (theme.DATA_ROW_COLORS, theme.DATA_ROW_TITLE),
+        (theme.CALC_ROW_COLORS, theme.CALC_ROW_TITLE),
+        (theme.DIRECTORY_ROW_COLORS, theme.DIRECTORY_ROW_TITLE),
+    ):
+        assert len(set(colors)) == len(colors)
+        for color in colors:
+            assert _contrast(color, "#FFFFFF") >= 4.5, color
+            assert _contrast(color, theme.FOCUS_RING) >= 3, color
+        assert _contrast(title, theme.BG) >= 4.5, title
+
+
+def test_accent_button_qss_darkens_hover_and_pressed():
+    """Производные оттенки — той же формулой, что ручные ACCENT_SKY_*
+    (с точностью до округления каналов)."""
+    assert theme._scaled(theme.ACCENT_SKY, 0.81) == "#32576D"  # вручную #325571
+    assert theme._scaled(theme.ACCENT_SKY, 0.63) == "#274355"  # вручную #264357
+    qss = theme.accent_button_qss(theme.ACCENT_SKY)
+    assert "QPushButton:hover {background-color: #32576D;}" in qss
+    assert "QPushButton:focus" in qss and "QPushButton:disabled" in qss

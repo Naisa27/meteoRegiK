@@ -485,7 +485,7 @@ def test_add_dialog_rejects_station_not_in_directory(tmp_path, messages):
     assert add.result_values is None
     assert messages == [("warning", data_browser.STATION_NOT_FOUND_MESSAGE)]
     assert "не существует в текущем справочнике метеостанций" in messages[0][1]
-    assert "внесите новую станцию в справочник (кнопка «Справочник станций» на главном экране)" in messages[0][1]
+    assert "внесите новую станцию в справочник (кнопка «Справочники» на главном экране)" in messages[0][1]
 
 
 def test_add_dialog_requires_station_hour_and_valid_date(tmp_path, messages):
@@ -568,3 +568,10 @@ def test_add_dialog_rejects_other_hours_with_message_and_saves_nothing(tmp_path,
     assert "0, 3, 6, 9, 12, 15, 18, 21" in messages[0][1]
     assert "не сохранены" in messages[0][1]
 
+
+
+def test_window_has_minimize_and_maximize_buttons(tmp_path):
+    _, dialog = _dialog(tmp_path)
+    flags = dialog.windowFlags()
+    assert flags & Qt.WindowType.WindowMinMaxButtonsHint == Qt.WindowType.WindowMinMaxButtonsHint
+    assert flags & Qt.WindowType.WindowCloseButtonHint

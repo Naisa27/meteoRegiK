@@ -77,6 +77,7 @@ from meteoregik.ui.aggregate_table_view import show_grid
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.date_field import DateField, DateFieldError
+from meteoregik.ui.dialogs import enable_min_max_buttons
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
@@ -255,16 +256,8 @@ class AggregateViewDialog(QDialog):
         run_async: bool = True,
     ) -> None:
         super().__init__(parent)
-        # Кнопки "свернуть"/"развернуть" в заголовке (правка 2026-09-25,
-        # п.3) — у QDialog по умолчанию только "?" и крестик. Размер окна
-        # после открытия меняется независимо от главного окна.
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowMinMaxButtonsHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
+        # Кнопки "свернуть"/"развернуть" (правка 2026-09-25, п.3).
+        enable_min_max_buttons(self)
         self.engine = engine
         # run_async=False — выборка в том же потоке (тесты: результат нужен
         # сразу после щелчка, без ожидания пула потоков).
