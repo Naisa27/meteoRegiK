@@ -1,7 +1,12 @@
-"""Общие поправки размеров кнопок, которые нельзя выразить в QSS."""
+"""Общие поправки кнопок, которые нельзя выразить в QSS: запас ширины под
+жирный фокус и перекрашенные под заливку иконки."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QPushButton
 
 # Запас ширины под жирный шрифт фокуса (см. reserve_focus_width).
@@ -25,3 +30,22 @@ def reserve_focus_width(*buttons: QPushButton) -> None:
     for button in buttons:
         button.ensurePolished()
         button.setMinimumWidth(button.sizeHint().width() + FOCUS_WIDTH_RESERVE)
+
+
+def tinted_icon(path: Path, color: str) -> QIcon:
+    """Монохромная иконка, перекрашенная в color с сохранением прозрачности.
+    Иконки в static/ — чёрные (например, snowman-alt_24.png), а на заливной
+    кнопке главного окна чёрный рисунок на тёмно-синем почти не виден — там
+    нужна иконка цвета текста кнопки (белая)."""
+    source = QPixmap(str(path))
+    if source.isNull():
+        return QIcon()
+    tinted = QPixmap(source.size())
+    tinted.setDevicePixelRatio(source.devicePixelRatio())
+    tinted.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(tinted)
+    painter.drawPixmap(0, 0, source)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(tinted.rect(), QColor(color))
+    painter.end()
+    return QIcon(tinted)

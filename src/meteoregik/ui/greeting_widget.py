@@ -17,7 +17,7 @@ import_requested / data_browser_requested / aggregate_view_requested,
 MainWindow сам решает, что делать. Кнопки — тремя рядами по разделам
 (правка 2026-09-30), у каждого ряда подпись и своя гамма из theme.py:
 "Работа с данными" (оттенки синего — импорт, просмотр исходных и агрегатных
-данных), "Расчёт показателей" (зелёные, кнопок пока нет) и "Справочники"
+данных, дашборд — dashboard_requested), "Расчёт показателей" (зелёные, кнопок пока нет) и "Справочники"
 (тёмное золото, station_directory_requested)."""
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal, SignalInstance
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from meteoregik.resources import LOGO_PATH
+from meteoregik.resources import DASHBOARD_ICON_PATH, LOGO_PATH
 from meteoregik.ui import theme
-from meteoregik.ui.buttons import reserve_focus_width
+from meteoregik.ui.buttons import reserve_focus_width, tinted_icon
 
 _WEEKDAYS_RU = [
     "понедельник", "вторник", "среда", "четверг",
@@ -57,6 +57,7 @@ class GreetingWidget(QWidget):
     import_requested = Signal()
     data_browser_requested = Signal()
     aggregate_view_requested = Signal()
+    dashboard_requested = Signal()
     station_directory_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -130,6 +131,7 @@ class GreetingWidget(QWidget):
                 ("Импорт данных", self.import_requested),
                 ("Просмотр исходных данных", self.data_browser_requested),
                 ("Просмотр агрегатных данных", self.aggregate_view_requested),
+                ("Дашборд", self.dashboard_requested, tinted_icon(DASHBOARD_ICON_PATH, "#FFFFFF")),
             ],
             theme.DATA_ROW_COLORS,
         )
@@ -160,7 +162,7 @@ class GreetingWidget(QWidget):
         layout: QVBoxLayout,
         title: str,
         title_color: str,
-        buttons: list[tuple[str, SignalInstance]],
+        buttons: list[tuple[str, SignalInstance] | tuple[str, SignalInstance, QIcon]],
         colors: tuple[str, ...],
     ) -> QHBoxLayout:
         """Подпись раздела + горизонтальный ряд заливных кнопок; i-я кнопка
@@ -178,8 +180,10 @@ class GreetingWidget(QWidget):
         row = QHBoxLayout()
         row.setSpacing(16)
         row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        for (text, signal), color in zip(buttons, colors):
+        for (text, signal, *icon), color in zip(buttons, colors):
             button = QPushButton(text)
+            if icon:
+                button.setIcon(icon[0])
             button.setStyleSheet(theme.accent_button_qss(color))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             reserve_focus_width(button)

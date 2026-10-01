@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
 
+from meteoregik.ui.dashboard_view import DashboardDialog
 from meteoregik.ui.data_browser import DataBrowserDialog
 from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
         greeting.import_requested.connect(self._open_import_dialog)
         greeting.data_browser_requested.connect(self._open_data_browser)
         greeting.aggregate_view_requested.connect(self._open_aggregate_view)
+        greeting.dashboard_requested.connect(self._open_dashboard)
         greeting.station_directory_requested.connect(self._open_station_directory)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
@@ -81,6 +83,10 @@ class MainWindow(QMainWindow):
 
     def _open_aggregate_view(self) -> None:
         dialog = AggregateViewDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_dashboard(self) -> None:
+        dialog = DashboardDialog(self.engine, self)
         dialog.exec()
 
     def _open_station_directory(self) -> None:

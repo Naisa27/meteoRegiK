@@ -37,7 +37,7 @@ def test_greeting_widget_emits_data_browser_requested_on_button_click():
     widget.data_browser_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
 
     buttons = widget.findChildren(QPushButton)
-    assert len(buttons) == 4  # три кнопки "Работы с данными" + "Справочники"
+    assert len(buttons) == 5  # четыре кнопки "Работы с данными" + "Справочники"
     data_browser_btn = next(b for b in buttons if b.text() == "Просмотр исходных данных")
     data_browser_btn.click()
 
@@ -70,3 +70,17 @@ def test_greeting_widget_buttons_use_different_accent_colors():
     assert import_btn.styleSheet() != data_browser_btn.styleSheet()
     assert data_browser_btn.styleSheet() != aggregate_view_btn.styleSheet()
     assert import_btn.styleSheet() != aggregate_view_btn.styleSheet()
+
+
+def test_greeting_widget_dashboard_button_has_icon_and_emits_signal():
+    _qapp()
+    widget = GreetingWidget()
+
+    emitted = {"n": 0}
+    widget.dashboard_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
+
+    dashboard_btn = next(b for b in widget.findChildren(QPushButton) if b.text() == "Дашборд")
+    assert not dashboard_btn.icon().isNull()
+    dashboard_btn.click()
+
+    assert emitted["n"] == 1

@@ -77,7 +77,7 @@ from meteoregik.ui.aggregate_table_view import show_grid
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.date_field import DateField, DateFieldError
-from meteoregik.ui.dialogs import enable_min_max_buttons
+from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
@@ -687,17 +687,5 @@ class AggregateViewDialog(QDialog):
     # --- свернуть окно ---
 
     def changeEvent(self, event: QEvent) -> None:
-        """"Свернуть" сворачивает всё приложение, а не одно это окно: окно
-        модальное и принадлежит главному, а свёрнутое принадлежащее окно
-        Windows не выносит на панель задач — его было бы не найти, пока
-        главное окно заблокировано модальностью. Свёрнутое главное окно
-        прячет и это окно, а при разворачивании с панели задач возвращает
-        оба."""
         super().changeEvent(event)
-        if event.type() != QEvent.Type.WindowStateChange or not self.isMinimized():
-            return
-        owner = self.parentWidget()
-        if owner is None:
-            return
-        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
-        owner.window().showMinimized()
+        minimize_owner_instead(self, event)

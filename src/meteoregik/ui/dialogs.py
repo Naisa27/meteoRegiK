@@ -4,7 +4,7 @@ QMessageBox ("Yes"/"No") без файлов перевода Qt остаютс�
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QDialog, QMessageBox, QWidget
 
 
@@ -37,3 +37,19 @@ def enable_min_max_buttons(dialog: QDialog) -> None:
         | Qt.WindowType.WindowMinMaxButtonsHint
         | Qt.WindowType.WindowCloseButtonHint
     )
+
+
+def minimize_owner_instead(dialog: QDialog, event: QEvent) -> None:
+    """Вызывать из changeEvent модального окна со свернуть/развернуть:
+    "Свернуть" сворачивает всё приложение, а не одно это окно. Окно модальное
+    и принадлежит главному, а свёрнутое принадлежащее окно Windows не выносит
+    на панель задач — его было бы не найти, пока главное окно заблокировано
+    модальностью. Свёрнутое главное окно прячет и это окно, а при
+    разворачивании с панели задач возвращает оба."""
+    if event.type() != QEvent.Type.WindowStateChange or not dialog.isMinimized():
+        return
+    owner = dialog.parentWidget()
+    if owner is None:
+        return
+    dialog.setWindowState(dialog.windowState() & ~Qt.WindowState.WindowMinimized)
+    owner.window().showMinimized()

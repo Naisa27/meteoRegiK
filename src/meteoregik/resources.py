@@ -29,6 +29,7 @@ _BASE_DIR = _bundled_base_dir()
 STATIC_DIR = _BASE_DIR / "static"
 APP_ICON_PATH = STATIC_DIR / "app_icon.ico"
 LOGO_PATH = STATIC_DIR / "meteo_1.png"
+DASHBOARD_ICON_PATH = STATIC_DIR / "snowman-alt_24.png"
 
 # sqlite-шаблон с уже залитыми справочниками stations/ru_regions — результат
 # разовой заливки из метеостанции_с_координатами.xlsx / Регионы_РФ.xlsx на
