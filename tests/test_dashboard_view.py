@@ -67,7 +67,7 @@ def test_card_texts_for_full_data():
     )
     texts = [(t.caption, t.value, t.note) for t in card_texts(data)]
     assert texts == [
-        ("Средняя температура", "+6.0 °C", "на 0.6 °C выше нормы"),
+        ("Средняя суточная температура за период", "+6.0 °C", "на 0.6 °C выше нормы"),
         ("Абсолютный максимум", "+35.2 °C", "12.07.2019"),
         ("Абсолютный минимум", "−31.0 °C", "01.02.2018"),
         ("Полнота данных", "99.5 %", "1 090 из 1 096 дн., пропущено 6"),
@@ -158,3 +158,29 @@ def test_dashboard_reports_empty_period(tmp_path, messages):
 
     assert messages == [("info", "За выбранный период данных не найдено.")]
     assert dialog._stack.currentIndex() == 0
+
+
+def test_every_card_has_its_own_help_text():
+    data = DashboardData(
+        date_from=date(2020, 1, 1), date_to=date(2020, 1, 10), days_total=10, days_with_data=0,
+        period_mean=None, period_anomaly=None, abs_max=None, abs_min=None,
+        warmest_year=None, coldest_year=None, warmest_month=None, coldest_month=None,
+    )
+    helps = [t.help for t in card_texts(data)]
+    # Подсказка есть и у карточки без значения — описывает расчёт, не результат.
+    assert all(helps)
+    assert len(set(helps)) == len(helps)
+    assert "правило ВМО «3/5»" in helps[4]
+    assert "норма его календарного месяца" in helps[0]
+
+
+def test_help_badge_shows_calculation_tooltip(tmp_path, messages):
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.apply_btn.click()
+
+    badge = dialog.cards[1].help_badge
+    assert badge.text() == "?"
+    assert "Наибольшая суточная максимальная температура" in badge.toolTip()
+    assert badge.accessibleName() == "Как считается: Абсолютный максимум"

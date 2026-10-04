@@ -13,16 +13,20 @@ UI", п.4): одна станция + период -> сверху карточ�
 Карточки — текстом с явной формулировкой ("на 0.6 °C выше нормы"), не
 только знаком числа или цветом; значения — цветом обычного текста (dataviz:
 text wears text tokens), цвет "тепло/холодно" есть только на графиках.
+В правом верхнем углу каждой карточки — значок "?" с подсказкой, как
+посчитан показатель (решение пользователя 2026-10-04). Подсказка
+показывается не только при наведении мыши, но и по фокусу с клавиатуры и по
+щелчку — иначе она недоступна без мыши.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Callable
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtGui import QFocusEvent, QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -32,6 +36,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -75,7 +81,93 @@ QLabel#statNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
 QLabel#chartTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
 QLabel#chartNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
 QLabel#emptyHint {{ color: {theme.TEXT_SECONDARY}; font-size: 14px; }}
+QToolButton#helpBadge {{
+    color: {theme.TEXT_SECONDARY};
+    background: {theme.INPUT_BG};
+    border: 1px solid {theme.TEXT_SECONDARY};
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 18px; max-width: 18px;
+    min-height: 18px; max-height: 18px;
+    padding: 0;
+}}
+QToolButton#helpBadge:hover {{ background: {theme.HEADER_BG}; color: {theme.TEXT_PRIMARY}; }}
+QToolButton#helpBadge:focus {{
+    border: {theme.FOCUS_RING_WIDTH}px solid {theme.FOCUS_RING};
+    color: {theme.TEXT_PRIMARY};
+}}
+QToolTip {{
+    color: {theme.TEXT_PRIMARY};
+    background: {theme.INPUT_BG};
+    border: 1px solid {theme.BORDER};
+    padding: 6px;
+    font-size: 12px;
+}}
 """
+
+# Подсказки "?" — как посчитан показатель карточки. Описывают фактический
+# расчёт (reports/dashboard_data.py, calculations/temperature.py), а не
+# "учебное" определение: при изменении расчёта править и их.
+_DAILY_MEAN = (
+    "Суточная средняя — среднее доступных сроков наблюдения rp5 "
+    "(сумма значений / число сроков) или значение из файла ГГ."
+)
+_COMPLETE_MONTH = (
+    "Месяц считается полным, если в нём пропущено не больше 5 дней и не больше "
+    "3 дней подряд (правило ВМО «3/5»)."
+)
+_COMPLETE_YEAR = "Год считается полным, если полны все 12 его месяцев. " + _COMPLETE_MONTH
+_MONTH_NORM = (
+    "Норма месяца — средняя температура этого календарного месяца по всем полным "
+    "месяцам архива станции (а не только выбранного периода)."
+)
+_DAILY_EXTREME_SOURCE = (
+    "Суточные значения берутся из файла ГГ, а для данных rp5 — {which} температура "
+    "среди сроков наблюдения за сутки (столбец T, не {column}), поэтому может "
+    "немного {direction} фактического экстремума между сроками."
+)
+
+HELP_MEAN = (
+    "Среднее суточных средних температур за все дни периода, по которым есть данные. "
+    + _DAILY_MEAN
+    + "\n\nОтклонение от нормы: для каждого дня берётся разность «суточная средняя − "
+    "норма его календарного месяца», затем эти разности усредняются по дням. Так "
+    "сравнение корректно и для неполного года или одного сезона. "
+    + _MONTH_NORM
+)
+HELP_ABS_MAX = (
+    "Наибольшая суточная максимальная температура за период и дата, когда она "
+    "наблюдалась (если таких дней несколько — самый ранний). "
+    + _DAILY_EXTREME_SOURCE.format(which="наибольшая", column="Tx", direction="уступать")
+)
+HELP_ABS_MIN = (
+    "Наименьшая суточная минимальная температура за период и дата, когда она "
+    "наблюдалась (если таких дней несколько — самый ранний). "
+    + _DAILY_EXTREME_SOURCE.format(which="наименьшая", column="Tn", direction="превышать")
+)
+HELP_COMPLETENESS = (
+    "Доля календарных дней периода, за которые есть суточная средняя температура: "
+    "дни с данными / все дни периода × 100 %."
+)
+_YEAR_RECORD = (
+    "Год с {which} среднегодовой температурой среди полных лет, целиком попавших в "
+    "период. Среднегодовая — среднее суточных средних за год. "
+    + _COMPLETE_YEAR
+    + "\n\nОтклонение — от годовой нормы: средней температуры по всем полным годам "
+    "архива станции."
+)
+_MONTH_RECORD = (
+    "Месяц с {which} средней температурой среди полных месяцев, целиком попавших в "
+    "период. Средняя месяца — среднее суточных средних за месяц. "
+    + _COMPLETE_MONTH
+    + "\n\nОтклонение — от нормы этого календарного месяца. "
+    + _MONTH_NORM
+)
+HELP_WARMEST_YEAR = _YEAR_RECORD.format(which="наибольшей")
+HELP_COLDEST_YEAR = _YEAR_RECORD.format(which="наименьшей")
+HELP_WARMEST_MONTH = _MONTH_RECORD.format(which="наибольшей")
+HELP_COLDEST_MONTH = _MONTH_RECORD.format(which="наименьшей")
 
 
 def _format_day(day: date) -> str:
@@ -92,6 +184,7 @@ class CardText:
     caption: str
     value: str
     note: str
+    help: str = ""
 
 
 def card_texts(data: DashboardData) -> list[CardText]:
@@ -99,12 +192,12 @@ def card_texts(data: DashboardData) -> list[CardText]:
     полнота; тёплый/холодный год, тёплый/холодный месяц. Отдельно от
     виджетов — проверяется тестами без раскладки."""
     if data.period_mean is None:
-        mean = CardText("Средняя температура", _NO_VALUE, "нет суточных значений в периоде")
+        mean = CardText("Средняя суточная температура за период", _NO_VALUE, "нет суточных значений в периоде")
     elif data.period_anomaly is None:
-        mean = CardText("Средняя температура", format_temperature(data.period_mean),
+        mean = CardText("Средняя суточная температура за период", format_temperature(data.period_mean),
                         "норма не рассчитана: нет полных месяцев")
     else:
-        mean = CardText("Средняя температура", format_temperature(data.period_mean),
+        mean = CardText("Средняя суточная температура за период", format_temperature(data.period_mean),
                         describe_anomaly(data.period_anomaly))
 
     def extreme(caption: str, record) -> CardText:
@@ -135,16 +228,17 @@ def card_texts(data: DashboardData) -> list[CardText]:
             note += ", " + describe_anomaly(record.anomaly, f"нормы {MONTHS_GENITIVE[record.month - 1]}")
         return CardText(caption, f"{MONTHS_NOMINATIVE[record.month - 1].capitalize()} {record.year}", note)
 
-    return [
-        mean,
-        extreme("Абсолютный максимум", data.abs_max),
-        extreme("Абсолютный минимум", data.abs_min),
-        completeness,
-        year("Самый тёплый год", data.warmest_year),
-        year("Самый холодный год", data.coldest_year),
-        month("Самый тёплый месяц", data.warmest_month),
-        month("Самый холодный месяц", data.coldest_month),
+    cards = [
+        (mean, HELP_MEAN),
+        (extreme("Абсолютный максимум", data.abs_max), HELP_ABS_MAX),
+        (extreme("Абсолютный минимум", data.abs_min), HELP_ABS_MIN),
+        (completeness, HELP_COMPLETENESS),
+        (year("Самый тёплый год", data.warmest_year), HELP_WARMEST_YEAR),
+        (year("Самый холодный год", data.coldest_year), HELP_COLDEST_YEAR),
+        (month("Самый тёплый месяц", data.warmest_month), HELP_WARMEST_MONTH),
+        (month("Самый холодный месяц", data.coldest_month), HELP_COLDEST_MONTH),
     ]
+    return [replace(text, help=help_text) for text, help_text in cards]
 
 
 def anomaly_note(data: DashboardData) -> str:
@@ -162,15 +256,58 @@ def anomaly_note(data: DashboardData) -> str:
     return text
 
 
+def tooltip_html(text: str) -> str:
+    """Подсказка как rich text фиксированной ширины — такую Qt переносит по
+    словам, а не тянет одной строкой во весь экран; абзацы — по пустой строке."""
+    paragraphs = "".join(f"<p style='margin: 0 0 6px 0'>{p}</p>" for p in text.split("\n\n"))
+    return f"<div style='width: 340px'>{paragraphs}</div>"
+
+
+class _HelpBadge(QToolButton):
+    """Значок "?" с подсказкой. Кроме наведения мыши подсказка показывается
+    по фокусу с клавиатуры (Tab) и по щелчку/пробелу — подсказка только по
+    наведению недоступна без мыши."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("helpBadge")
+        self.setText("?")
+        self.setCursor(Qt.CursorShape.WhatsThisCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.clicked.connect(self.show_tip)
+
+    def set_help(self, caption: str, text: str) -> None:
+        self.setToolTip(tooltip_html(text) if text else "")
+        self.setAccessibleName(f"Как считается: {caption}")
+        self.setAccessibleDescription(text)
+
+    def show_tip(self) -> None:
+        if self.toolTip():
+            QToolTip.showText(self.mapToGlobal(QPoint(0, self.height() + 4)), self.toolTip(), self)
+
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        super().focusInEvent(event)
+        if event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason):
+            self.show_tip()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        super().focusOutEvent(event)
+        QToolTip.hideText()
+
+
 class _StatCard(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("statCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setContentsMargins(14, 10, 10, 10)
         layout.setSpacing(2)
         self.caption = QLabel()
         self.caption.setObjectName("statCaption")
+        # Длинная подпись ("Средняя суточная температура за период") в узком
+        # окне переносится, а не обрезается.
+        self.caption.setWordWrap(True)
+        self.help_badge = _HelpBadge()
         self.value = QLabel()
         self.value.setObjectName("statValue")
         self.note = QLabel()
@@ -178,13 +315,20 @@ class _StatCard(QFrame):
         self.note.setWordWrap(True)
         for label in (self.caption, self.value, self.note):
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            layout.addWidget(label)
+        caption_row = QHBoxLayout()
+        caption_row.setSpacing(6)
+        caption_row.addWidget(self.caption, stretch=1)
+        caption_row.addWidget(self.help_badge, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(caption_row)
+        layout.addWidget(self.value)
+        layout.addWidget(self.note)
         layout.addStretch(1)
 
     def set_text(self, text: CardText) -> None:
         self.caption.setText(text.caption)
         self.value.setText(text.value)
         self.note.setText(text.note)
+        self.help_badge.set_help(text.caption, text.help)
 
 
 @dataclass(frozen=True)
