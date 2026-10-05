@@ -26,8 +26,10 @@ from datetime import date
 from typing import Callable, Iterable
 
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QFocusEvent, QIcon
+from PySide6.QtGui import QColor, QFocusEvent, QIcon, QLinearGradient, QPainter
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QButtonGroup,
     QDialog,
     QFrame,
     QGridLayout,
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QStackedWidget,
     QToolButton,
     QToolTip,
@@ -66,13 +69,20 @@ from meteoregik.stations.choices import load_stations_with_computed_indicators
 from meteoregik.ui import theme
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
-from meteoregik.ui.dashboard_charts import AnomalyChart, TemperatureHeatmap
+from meteoregik.ui.dashboard_charts import (
+    HEATMAP_ANOMALY,
+    HEATMAP_VALUE,
+    AnomalyChart,
+    TemperatureHeatmap,
+)
 from meteoregik.ui.date_field import DateField, DateFieldError
 from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
 _TITLE = "Дашборд"
+# Тёмно-синий текст переключателя теплокарты: 11.6:1 на белом
+HEATMAP_MODE_TEXT = "#1E3A6E"
 _START_HINT = (
     "Выберите метеостанцию и нажмите «Применить».\n"
     "Если период не указан, берётся весь архив станции."
@@ -88,6 +98,12 @@ QFrame#statCard {{
 QLabel#statCaption {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
 QLabel#statValue {{ color: {theme.TEXT_PRIMARY}; font-size: 20px; font-weight: 600; }}
 QLabel#statNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
+QFrame#heatmapMode {{
+    background: {theme.INPUT_BG};
+    border: 1px solid {theme.HEADER_BORDER};
+    border-radius: 8px;
+}}
+QFrame#heatmapMode QRadioButton {{ color: {HEATMAP_MODE_TEXT}; font-weight: 600; }}
 QLabel#chartTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
 QLabel#chartNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
 QLabel#emptyHint {{ color: {theme.TEXT_SECONDARY}; font-size: 14px; }}
@@ -504,6 +520,34 @@ class _HelpBadge(QToolButton):
         QToolTip.hideText()
 
 
+class _GrooveDivider(QWidget):
+    """Вертикальная "вдавленная" черта между теплокартой и графиком: тёмная
+    линия-тень и светлая линия-блик рядом (классический engraved-эффект),
+    к концам плавно растворяется в фоне — не режет экран жёсткой чертой."""
+
+    _SHADOW = QColor(theme.HEADER_BORDER).darker(135)
+    _LIGHT = QColor("#FFFFFF")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(12)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — имя метода Qt
+        painter = QPainter(self)
+        x = self.width() // 2 - 1
+        for offset, color in ((0, self._SHADOW), (1, self._LIGHT)):
+            gradient = QLinearGradient(0, 0, 0, self.height())
+            transparent = QColor(color)
+            transparent.setAlpha(0)
+            gradient.setColorAt(0.0, transparent)
+            gradient.setColorAt(0.12, color)
+            gradient.setColorAt(0.88, color)
+            gradient.setColorAt(1.0, transparent)
+            painter.fillRect(x + offset, 0, 1, self.height(), gradient)
+        painter.end()
+
+
 class _StatCard(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -662,27 +706,84 @@ class DashboardDialog(QDialog):
         charts = QHBoxLayout()
         charts.setSpacing(16)
         self.heatmap = TemperatureHeatmap()
-        charts.addLayout(
-            self._chart_block(
-                "Средняя температура по месяцам",
-                "Штриховка — неполный месяц (пропущено больше 5 дней или больше 3 подряд), "
-                "пустая клетка — нет данных.",
-                self.heatmap,
-            ),
-            stretch=1,
-        )
+        charts.addLayout(self._heatmap_block(), stretch=1)
+        charts.addWidget(_GrooveDivider())
         self.anomaly_chart = AnomalyChart()
         self._anomaly_note = QLabel()
         charts.addLayout(
             self._chart_block("Отклонение среднегодовой температуры от нормы", self._anomaly_note,
-                              self.anomaly_chart),
+                              self.anomaly_chart, centered=True),
             stretch=1,
         )
         layout.addLayout(charts, stretch=1)
         return content
 
+    def _heatmap_block(self) -> QVBoxLayout:
+        """Теплокарта с переключателем "Отклонение от нормы / Температура" в
+        строке заголовка. Переключение — сразу, без "Применить": данные уже
+        загружены, меняется только раскраска."""
+        block = QVBoxLayout()
+        block.setSpacing(2)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        self._heatmap_title = QLabel()
+        self._heatmap_title.setObjectName("chartTitle")
+        title_row.addWidget(self._heatmap_title)
+        title_row.addStretch(1)
+        # Переключатель — в рамке (как группы фильтров), подписи тёмно-синие:
+        # отделяет "настройку вида" от заголовка и подписей самой карты.
+        mode_frame = QFrame()
+        mode_frame.setObjectName("heatmapMode")
+        mode_layout = QHBoxLayout(mode_frame)
+        mode_layout.setContentsMargins(10, 3, 10, 3)
+        mode_layout.setSpacing(12)
+        self.heatmap_anomaly_radio = QRadioButton("Отклонение от нормы")
+        self.heatmap_value_radio = QRadioButton("Температура")
+        self.heatmap_anomaly_radio.setChecked(True)
+        self._heatmap_mode_group = QButtonGroup(self)
+        for radio in (self.heatmap_anomaly_radio, self.heatmap_value_radio):
+            self._heatmap_mode_group.addButton(radio)
+            mode_layout.addWidget(radio)
+        title_row.addWidget(mode_frame)
+        self._heatmap_mode_group.buttonToggled.connect(self._on_heatmap_mode_toggled)
+        block.addLayout(title_row)
+        self._heatmap_note = QLabel()
+        self._heatmap_note.setObjectName("chartNote")
+        self._heatmap_note.setWordWrap(True)
+        block.addWidget(self._heatmap_note)
+        block.addWidget(self.heatmap, stretch=1)
+        self._update_heatmap_texts(short_period=False)
+        return block
+
+    def _on_heatmap_mode_toggled(self, button: QAbstractButton, checked: bool) -> None:
+        if not checked:
+            return
+        self.heatmap.set_mode(HEATMAP_ANOMALY if button is self.heatmap_anomaly_radio else HEATMAP_VALUE)
+        self._update_heatmap_texts(self._heatmap_short)
+
+    def _update_heatmap_texts(self, short_period: bool) -> None:
+        self._heatmap_short = short_period
+        unit = "декадам" if short_period else "месяцам"
+        anomaly = self.heatmap.mode == HEATMAP_ANOMALY
+        self._heatmap_title.setText(
+            f"{'Отклонение от нормы' if anomaly else 'Средняя температура'} по {unit}"
+        )
+        part = "декада" if short_period else "месяц"
+        incomplete = (
+            "Штриховка — неполная декада (пропущено больше 2 дней)"
+            if short_period
+            else "Штриховка — неполный месяц (пропущено больше 5 дней или больше 3 подряд)"
+        )
+        color = (
+            f"Красный — {part} теплее своей нормы, синий — холоднее. " if anomaly
+            else "Красный — выше 0 °C, синий — ниже. "
+        )
+        self._heatmap_note.setText(f"{color}{incomplete}, пустая клетка — нет данных.")
+
     @staticmethod
-    def _chart_block(title: str, note: str | QLabel, chart: QWidget) -> QVBoxLayout:
+    def _chart_block(
+        title: str, note: str | QLabel, chart: QWidget, *, centered: bool = False
+    ) -> QVBoxLayout:
         block = QVBoxLayout()
         block.setSpacing(2)
         title_label = QLabel(title)
@@ -692,6 +793,9 @@ class DashboardDialog(QDialog):
         note_label.setObjectName("chartNote")
         note_label.setWordWrap(True)
         block.addWidget(note_label)
+        if centered:
+            for label in (title_label, note_label):
+                label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         block.addWidget(chart, stretch=1)
         return block
 
@@ -792,6 +896,7 @@ class DashboardDialog(QDialog):
             card.set_text(text)
         self._anomaly_note.setText(anomaly_note(data))
         self._stack.setCurrentWidget(self._content)
+        self._update_heatmap_texts(data.short_period)
         self.heatmap.plot(data)
         self.anomaly_chart.plot(data)
 

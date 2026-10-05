@@ -14,13 +14,16 @@ from meteoregik.db.session import get_engine
 from meteoregik.reports.dashboard_data import (
     DashboardData,
     DatedValue,
+    DecadeCell,
     DecadeRecord,
+    MonthCell,
     MonthRecord,
     NormInfo,
     YearAnomaly,
     describe_anomaly,
     format_signed,
 )
+from meteoregik.ui.dashboard_charts import HEATMAP_ANOMALY, HEATMAP_VALUE, heat_cell_tooltip
 from meteoregik.ui.dashboard_view import DashboardDialog, anomaly_note, card_texts
 
 WMO_INDEX = 27704
@@ -197,9 +200,58 @@ def test_dashboard_builds_cards_and_charts_for_whole_archive(tmp_path, messages)
     assert dialog.cards[4].value.text() == "2020"
     assert dialog.cards[5].value.text() == "2019"
     assert "2 полн. лет (2019–2020)" in dialog._anomaly_note.text()
-    assert dialog.heatmap._years == [2019, 2020]
+    assert dialog.heatmap._grid.row_labels == ["2019", "2020"]
     assert [a.year for a in dialog.anomaly_chart._anomalies] == [2019, 2020]
     assert not dialog.loading_overlay.isVisible()
+
+
+def test_heatmap_switches_between_anomaly_and_temperature(tmp_path, messages):
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.apply_btn.click()
+
+    # по умолчанию — отклонение от нормы: по нему видны тёплые и холодные годы
+    assert dialog.heatmap.mode == HEATMAP_ANOMALY
+    assert dialog._heatmap_title.text() == "Отклонение от нормы по месяцам"
+
+    dialog.heatmap_value_radio.setChecked(True)
+
+    assert dialog.heatmap.mode == HEATMAP_VALUE
+    assert dialog._heatmap_title.text() == "Средняя температура по месяцам"
+
+
+def test_heatmap_short_period_is_months_by_decades(tmp_path, messages):
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.date_from_edit.set_date(date(2020, 1, 15))
+    dialog.date_to_edit.set_date(date(2020, 3, 31))
+    dialog.apply_btn.click()
+
+    grid = heat_grid_of(dialog)
+    assert grid.row_labels == ["янв 2020", "фев 2020", "мар 2020"]
+    assert grid.col_labels == ["1-я дек.", "2-я дек.", "3-я дек."]
+    # 1-я декада января (01–10.01) целиком до начала периода (15.01) — пустая клетка
+    assert grid.cells[0][0] is None
+    assert grid.cells[0][1].value == pytest.approx(2.0)
+    assert dialog._heatmap_title.text() == "Отклонение от нормы по декадам"
+
+
+def heat_grid_of(dialog):
+    return dialog.heatmap._grid
+
+
+def test_heat_cell_tooltip_shows_value_and_anomaly():
+    cell = MonthCell(2020, 1, -3.5, 25, 31, complete=False, norm=-6.0)
+    assert heat_cell_tooltip("Январь 2020", cell) == (
+        "Январь 2020: −3.5 °C\n"
+        "Отклонение от нормы: +2.5 °C (норма −6.0 °C)\n"
+        "Неполный месяц: данные за 25 из 31 дн."
+    )
+    decade = DecadeCell(date(2020, 7, 11), 21.0, 10, 10, complete=True)
+    assert heat_cell_tooltip("2-я декада июля 2020", decade) == "2-я декада июля 2020: +21.0 °C\nНорма не рассчитана"
+    assert heat_cell_tooltip("Март 2020", None) == "Март 2020: нет данных"
 
 
 def test_dashboard_reports_empty_period(tmp_path, messages):

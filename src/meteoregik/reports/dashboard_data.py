@@ -99,6 +99,32 @@ class MonthCell:
     days_with_data: int
     days_in_month: int
     complete: bool
+    norm: float | None = None  # норма этого календарного месяца
+
+    @property
+    def anomaly(self) -> float | None:
+        return self.value - self.norm if self.value is not None and self.norm is not None else None
+
+
+@dataclass(frozen=True)
+class DecadeCell:
+    """Ячейка теплокарты короткого периода (строки — месяцы, столбцы —
+    декады): средняя декады, полнота и норма той же декады того же месяца."""
+
+    start: date  # первый день декады
+    value: float
+    days_with_data: int
+    days_in_decade: int
+    complete: bool
+    norm: float | None = None
+
+    @property
+    def number(self) -> int:
+        return (self.start.day - 1) // 10 + 1
+
+    @property
+    def anomaly(self) -> float | None:
+        return self.value - self.norm if self.norm is not None else None
 
 
 @dataclass(frozen=True)
@@ -182,6 +208,8 @@ class DashboardData:
     short_period: bool = False
     warmest_decades: tuple[DecadeRecord, ...] = ()
     coldest_decades: tuple[DecadeRecord, ...] = ()
+    # Теплокарта короткого периода: декады, пересекающиеся с периодом
+    decade_cells: dict[date, DecadeCell] = field(default_factory=dict)
     years: list[int] = field(default_factory=list)  # строки теплокарты
     month_cells: dict[tuple[int, int], MonthCell] = field(default_factory=dict)
     year_anomalies: list[YearAnomaly] = field(default_factory=list)
@@ -342,18 +370,22 @@ def is_short_period(date_from: date, date_to: date) -> bool:
     return date_to < _add_months(date_from, MIN_YEAR_RECORD_MONTHS) - timedelta(days=1)
 
 
-def _decade_averages(days: dict[date, DayTemps]) -> dict[date, tuple[float, bool]]:
+def _decade_averages(days: dict[date, DayTemps]) -> dict[date, tuple[float, int, int]]:
     """Средняя каждой декады по суточным средним (как decade в
-    calculations/temperature.py, с тем же округлением) и её полнота."""
+    calculations/temperature.py, с тем же округлением), число дней с данными
+    и длина декады."""
     by_decade: dict[date, list[float]] = {}
     for day, temps in days.items():
         if temps.avg is not None:
             by_decade.setdefault(decade_bounds(day)[0], []).append(temps.avg)
-    result: dict[date, tuple[float, bool]] = {}
-    for start, values in by_decade.items():
-        length = (decade_bounds(start)[1] - start).days + 1
-        result[start] = (round(fmean(values), 2), length - len(values) <= MAX_MISSING_DECADE_DAYS)
-    return result
+    return {
+        start: (round(fmean(values), 2), len(values), (decade_bounds(start)[1] - start).days + 1)
+        for start, values in by_decade.items()
+    }
+
+
+def _decade_complete(days_with_data: int, length: int) -> bool:
+    return length - days_with_data <= MAX_MISSING_DECADE_DAYS
 
 
 def _norm_base(
@@ -425,7 +457,7 @@ def compute_dashboard(
             if value is None and day_count == 0:
                 continue
             month_cells[key] = MonthCell(
-                year, month, value, day_count, end.day, complete=key in complete_months
+                year, month, value, day_count, end.day, complete=key in complete_months, norm=month_norms.get(month)
             )
             if value is not None and key in complete_months and date_from <= start and end <= date_to:
                 norm = month_norms.get(month)
@@ -436,15 +468,22 @@ def compute_dashboard(
     # --- декады: рекорды для короткого периода (полные декады целиком внутри) ---
     decade_avgs = _decade_averages(days)
     decade_norm_values: dict[tuple[int, int], list[float]] = {}
-    for start, (value, complete) in decade_avgs.items():
-        if complete and (start.year, start.month) in norm_months:
+    for start, (value, count, length) in decade_avgs.items():
+        if _decade_complete(count, length) and (start.year, start.month) in norm_months:
             decade_norm_values.setdefault((start.month, start.day), []).append(value)
     decade_norms = {key: fmean(values) for key, values in decade_norm_values.items()}
     inside_decades: list[DecadeRecord] = []
+    decade_cells: dict[date, DecadeCell] = {}
     for start in sorted(decade_avgs):
-        value, complete = decade_avgs[start]
-        if complete and date_from <= start and decade_bounds(start)[1] <= date_to:
-            norm = decade_norms.get((start.month, start.day))
+        value, count, length = decade_avgs[start]
+        end = decade_bounds(start)[1]
+        if end < date_from or start > date_to:
+            continue
+        complete = _decade_complete(count, length)
+        norm = decade_norms.get((start.month, start.day))
+        # теплокарта — по пересечению с периодом (как месяцы), рекорды — целиком внутри
+        decade_cells[start] = DecadeCell(start, value, count, length, complete, norm)
+        if complete and date_from <= start and end <= date_to:
             inside_decades.append(DecadeRecord(start, value, value - norm if norm is not None else None, norm))
 
     # --- годы: аномалии и тренд (полные годы целиком внутри периода) ---
@@ -483,6 +522,7 @@ def compute_dashboard(
         ),
         years=sorted({year for year, _ in month_cells}),
         month_cells=month_cells,
+        decade_cells=decade_cells,
         year_anomalies=year_anomalies,
         trend=linear_trend([(y.year, y.anomaly) for y in year_anomalies]),
         annual_norm=annual_norm,

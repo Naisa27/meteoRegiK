@@ -20,6 +20,7 @@ mplcursors: у теплокарты pcolormesh (между клетками — 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -32,9 +33,11 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QToolTip, QVBoxLayout, QWidget
 
 from meteoregik.reports.dashboard_data import (
+    MONTHS_GENITIVE,
     MONTHS_NOMINATIVE,
     MONTHS_SHORT,
     DashboardData,
+    DecadeCell,
     MonthCell,
     YearAnomaly,
     format_signed,
@@ -110,38 +113,127 @@ class _ChartCanvas(QWidget):
                 color=theme.TEXT_SECONDARY, fontsize=10, transform=ax.transAxes)
 
 
+# Режимы теплокарты: цвет — сама средняя или её отклонение от нормы.
+HEATMAP_VALUE = "value"
+HEATMAP_ANOMALY = "anomaly"
+
+_DECADE_COLUMNS = ["1-я дек.", "2-я дек.", "3-я дек."]
+
+HeatCell = MonthCell | DecadeCell
+
+
+@dataclass(frozen=True)
+class HeatGrid:
+    """Раскладка теплокарты, общая для двух видов: годы × месяцы и (для
+    короткого периода) месяцы × декады."""
+
+    row_labels: list[str]
+    col_labels: list[str]
+    cells: list[list[HeatCell | None]]
+    label_every: int  # подписывать строки, у которых год делится на это число (1 — все)
+
+
+def _cell_title(cell: HeatCell) -> str:
+    if isinstance(cell, DecadeCell):
+        return f"{cell.number}-я декада {MONTHS_GENITIVE[cell.start.month - 1]} {cell.start.year}"
+    return f"{MONTHS_NOMINATIVE[cell.month - 1].capitalize()} {cell.year}"
+
+
+def heat_grid(data: DashboardData) -> HeatGrid:
+    """Короткий период (меньше 24 месяцев) — строки-месяцы и столбцы-декады:
+    в виде "годы × месяцы" такой период — одна-две строки, по ним не виден
+    ход температуры внутри месяца. Иначе — строки-годы и столбцы-месяцы."""
+    if data.short_period:
+        months = sorted({(c.start.year, c.start.month) for c in data.decade_cells.values()})
+        by_key = {(c.start.year, c.start.month, c.number): c for c in data.decade_cells.values()}
+        return HeatGrid(
+            [f"{MONTHS_SHORT[m - 1]} {y}" for y, m in months],
+            _DECADE_COLUMNS,
+            [[by_key.get((y, m, n)) for n in (1, 2, 3)] for y, m in months],
+            1,
+        )
+    step = next((s for s in _YEAR_TICK_STEPS if len(data.years) / s <= _MAX_YEAR_TICKS), _YEAR_TICK_STEPS[-1])
+    return HeatGrid(
+        [str(year) for year in data.years],
+        list(MONTHS_SHORT),
+        [
+            [
+                cell if (cell := data.month_cells.get((year, m))) is not None and cell.value is not None else None
+                for m in range(1, 13)
+            ]
+            for year in data.years
+        ],
+        step,
+    )
+
+
+def _cell_number(cell: HeatCell | None, mode: str) -> float | None:
+    if cell is None:
+        return None
+    return cell.anomaly if mode == HEATMAP_ANOMALY else cell.value
+
+
+def heat_cell_tooltip(title: str, cell: HeatCell | None) -> str:
+    """Подсказка клетки — оба числа сразу, какой бы режим ни был выбран."""
+    if cell is None or cell.value is None:
+        return f"{title}: нет данных"
+    lines = [f"{title}: {format_temperature(cell.value)}"]
+    if cell.anomaly is None or cell.norm is None:
+        lines.append("Норма не рассчитана")
+    else:
+        lines.append(
+            f"Отклонение от нормы: {format_signed(cell.anomaly)} °C (норма {format_temperature(cell.norm)})"
+        )
+    if not cell.complete:
+        if isinstance(cell, DecadeCell):
+            lines.append(f"Неполная декада: данные за {cell.days_with_data} из {cell.days_in_decade} дн.")
+        else:
+            lines.append(f"Неполный месяц: данные за {cell.days_with_data} из {cell.days_in_month} дн.")
+    return "\n".join(lines)
+
+
 class TemperatureHeatmap(_ChartCanvas):
-    """Строки — годы (сверху вниз по возрастанию), столбцы — месяцы."""
+    """Строки — годы (сверху вниз по возрастанию), столбцы — месяцы; для
+    короткого периода — строки-месяцы, столбцы-декады. Цвет — средняя
+    температура или её отклонение от нормы (set_mode): в абсолютных
+    значениях карта показывает в основном смену сезонов (все январи синие,
+    все июли красные), а отличия между годами видны по отклонению."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._years: list[int] = []
-        self._cells: dict[tuple[int, int], MonthCell] = {}
+        self._data: DashboardData | None = None
+        self._grid: HeatGrid | None = None
+        self._mode = HEATMAP_ANOMALY
         self._ax = None
 
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode
+        if self._data is not None:
+            self._draw()
+
     def plot(self, data: DashboardData) -> None:
+        self._data = data
+        self._draw()
+
+    def _draw(self) -> None:
+        assert self._data is not None
         self.figure.clear()
-        self._years = data.years
-        self._cells = data.month_cells
+        grid = self._grid = heat_grid(self._data)
         ax = self._ax = self.figure.add_subplot(111)
-        if not self._years:
-            self._show_message(ax, "Нет месячных значений за выбранный период.")
+        if not grid.row_labels:
+            self._show_message(ax, "Нет значений за выбранный период.")
             self.canvas.draw_idle()
             return
 
-        values = ma.masked_invalid(
-            [
-                [
-                    cell.value if (cell := self._cells.get((year, month))) is not None and cell.value is not None
-                    else math.nan
-                    for month in range(1, 13)
-                ]
-                for year in self._years
-            ]
-        )
+        numbers = [[_cell_number(cell, self._mode) for cell in row] for row in grid.cells]
+        values = ma.masked_invalid([[math.nan if v is None else v for v in row] for row in numbers])
         halfrange = float(abs(values).max()) if values.count() else 1.0
         norm = CenteredNorm(vcenter=0, halfrange=max(halfrange, 0.5))
-        gap = 1.5 if len(self._years) <= MAX_GAPPED_YEARS else 0
+        gap = 1.5 if len(grid.row_labels) <= MAX_GAPPED_YEARS else 0
         mesh = ax.pcolormesh(values, cmap=DIVERGING_CMAP, norm=norm, edgecolors=theme.BG, linewidth=gap)
         ax.invert_yaxis()
         _style_axes(ax)
@@ -149,28 +241,31 @@ class TemperatureHeatmap(_ChartCanvas):
             spine.set_visible(False)
         ax.tick_params(length=0)
 
-        ax.set_xticks([m + 0.5 for m in range(12)], MONTHS_SHORT)
+        ax.set_xticks([c + 0.5 for c in range(len(grid.col_labels))], grid.col_labels)
         ax.xaxis.tick_top()
-        step = next((s for s in _YEAR_TICK_STEPS if len(self._years) / s <= _MAX_YEAR_TICKS), _YEAR_TICK_STEPS[-1])
-        ticks = [(row, year) for row, year in enumerate(self._years) if year % step == 0]
-        ax.set_yticks([row + 0.5 for row, _ in ticks], [str(year) for _, year in ticks])
+        ticks = [
+            (row, label) for row, label in enumerate(grid.row_labels)
+            if grid.label_every == 1 or int(label) % grid.label_every == 0
+        ]
+        ax.set_yticks([row + 0.5 for row, _ in ticks], [label for _, label in ticks])
 
-        annotate = len(self._years) <= MAX_ANNOTATED_YEARS
-        for row, year in enumerate(self._years):
-            for col in range(12):
-                cell = self._cells.get((year, col + 1))
-                if cell is None or cell.value is None:
+        annotate = len(grid.row_labels) <= MAX_ANNOTATED_YEARS
+        for row, cells in enumerate(grid.cells):
+            for col, cell in enumerate(cells):
+                number = numbers[row][col]
+                if cell is None or number is None:
                     continue
                 if not cell.complete:
-                    # Штриховка — неполный месяц (пометка не только цветом).
+                    # Штриховка — неполный месяц/декада (пометка не только цветом).
                     ax.add_patch(Rectangle((col, row), 1, 1, fill=False, hatch="////",
                                            edgecolor=theme.TEXT_SECONDARY, linewidth=0, alpha=0.55))
                 if annotate:
-                    ax.text(col + 0.5, row + 0.5, format_signed(cell.value), ha="center", va="center",
-                            fontsize=7.5, color=_text_color_on(mesh.cmap(mesh.norm(cell.value))))
+                    ax.text(col + 0.5, row + 0.5, format_signed(number), ha="center", va="center",
+                            fontsize=7.5, color=_text_color_on(mesh.cmap(mesh.norm(number))))
 
         colorbar = self.figure.colorbar(mesh, ax=ax, fraction=0.04, pad=0.02)
-        colorbar.set_label("°C", color=theme.TEXT_SECONDARY)
+        colorbar.set_label("отклонение, °C" if self._mode == HEATMAP_ANOMALY else "°C",
+                           color=theme.TEXT_SECONDARY)
         colorbar.outline.set_visible(False)
         colorbar.ax.tick_params(colors=theme.TEXT_SECONDARY, labelsize=8, length=0)
 
@@ -178,20 +273,18 @@ class TemperatureHeatmap(_ChartCanvas):
         self.canvas.draw_idle()
 
     def tooltip_at(self, event: MouseEvent) -> str | None:
-        if event.inaxes is not self._ax or event.xdata is None or event.ydata is None:
+        grid = self._grid
+        if grid is None or event.inaxes is not self._ax or event.xdata is None or event.ydata is None:
             return None
         col, row = int(event.xdata), int(event.ydata)
-        if not (0 <= col < 12 and 0 <= row < len(self._years)):
+        if not (0 <= col < len(grid.col_labels) and 0 <= row < len(grid.row_labels)):
             return None
-        year, month = self._years[row], col + 1
-        title = f"{MONTHS_NOMINATIVE[month - 1].capitalize()} {year}"
-        cell = self._cells.get((year, month))
-        if cell is None or cell.value is None:
-            return f"{title}: нет данных"
-        text = f"{title}: {format_temperature(cell.value)}"
-        if not cell.complete:
-            text += f"\nНеполный месяц: данные за {cell.days_with_data} из {cell.days_in_month} дн."
-        return text
+        cell = grid.cells[row][col]
+        if cell is not None:
+            return heat_cell_tooltip(_cell_title(cell), cell)
+        if self._data is not None and self._data.short_period:
+            return heat_cell_tooltip(f"{grid.col_labels[col]}, {grid.row_labels[row]}", None)
+        return heat_cell_tooltip(f"{MONTHS_NOMINATIVE[col].capitalize()} {grid.row_labels[row]}", None)
 
 
 class AnomalyChart(_ChartCanvas):
