@@ -46,7 +46,10 @@ from sqlalchemy.engine import Engine
 from meteoregik.reports.dashboard_data import (
     MONTHS_GENITIVE,
     MONTHS_NOMINATIVE,
+    MIN_NORM_BASE_YEARS,
     MIN_TREND_YEARS,
+    NORM_BASE_FIRST_YEAR,
+    NORM_BASE_LAST_YEAR,
     DashboardData,
     MonthRecord,
     YearAnomaly,
@@ -110,41 +113,69 @@ QToolTip {{
 # расчёт (reports/dashboard_data.py, calculations/temperature.py), а не
 # "учебное" определение: при изменении расчёта править и их.
 _DAILY_MEAN = (
-    "Суточная средняя — среднее доступных сроков наблюдения rp5 "
-    "(сумма значений / число сроков) или значение из файла ГГ."
+    "Средняя температура дня: для данных rp5 — среднее всех измерений за сутки "
+    "(обычно их 8, каждые 3 часа; если части нет — по тем, что есть), для файлов "
+    "ГГ — готовое значение из файла."
 )
 _COMPLETE_MONTH = (
     "Месяц считается полным, если в нём пропущено не больше 5 дней и не больше "
     "3 дней подряд (правило ВМО «3/5»)."
 )
 _COMPLETE_YEAR = "Год считается полным, если полны все 12 его месяцев. " + _COMPLETE_MONTH
-_MONTH_NORM = (
-    "Норма месяца — средняя температура этого календарного месяца по всем полным "
-    "месяцам архива станции (а не только выбранного периода)."
+# Сколько дат рекорда перечислять на карточке абс. максимума/минимума
+MAX_LISTED_DAYS = 5
+
+_NORM_BASE = f"{NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR}"
+_NORM_WHAT = (
+    "Норма — обычная для станции температура. По правилам Всемирной "
+    f"метеорологической организации (ВМО) это средняя за 30 лет, {_NORM_BASE}; "
+    "учитываются только полные месяцы и годы. Норма одна и та же для любого "
+    f"выбранного периода и для любого года, в том числе до {NORM_BASE_FIRST_YEAR}-го."
+)
+_NORM_FALLBACK = (
+    f"Если у станции за {_NORM_BASE} меньше {MIN_NORM_BASE_YEARS} полных лет, вместо нормы берётся "
+    "средняя по всему архиву станции (в подписи — «средняя по архиву»). Тогда "
+    "весь архив почти всегда выходит «на уровне»: данные сравниваются сами с собой."
 )
 _DAILY_EXTREME_SOURCE = (
-    "Суточные значения берутся из файла ГГ, а для данных rp5 — {which} температура "
-    "среди сроков наблюдения за сутки (столбец T, не {column}), поэтому может "
-    "немного {direction} фактического экстремума между сроками."
+    "Откуда берётся {what} температура дня: для файлов ГГ — готовое значение из "
+    "файла; для rp5 — {which} из измерений за сутки (столбец T, измерения каждые "
+    "3 часа), а не столбец {column}. Настоящий {peak} мог прийтись между "
+    "измерениями, поэтому значение может быть немного {direction} фактического."
+)
+_EXTREME_PERIOD = (
+    "{caption} температура за выбранный период (если период не выбран — за весь "
+    "архив станции) и даты, когда она наблюдалась. Если такая температура была в "
+    "несколько дней, перечислены все даты."
 )
 
 HELP_MEAN = (
-    "Среднее суточных средних температур за все дни периода, по которым есть данные. "
+    "Берутся средние температуры всех дней периода, за которые есть данные, "
+    "складываются и делятся на число таких дней. Дни без данных просто "
+    "пропускаются — нулями они не считаются. Если период не выбран, берётся "
+    "весь архив станции. "
     + _DAILY_MEAN
-    + "\n\nОтклонение от нормы: для каждого дня берётся разность «суточная средняя − "
-    "норма его календарного месяца», затем эти разности усредняются по дням. Так "
-    "сравнение корректно и для неполного года или одного сезона. "
-    + _MONTH_NORM
+    + "\n\n"
+    + _NORM_WHAT
+    + "\n\nСравнение с нормой: каждый день сравнивается с нормой своего месяца "
+    "(январский — с январской, июльский — с июльской), и эти разницы "
+    "усредняются. Поэтому летний период не окажется «выше нормы» только "
+    "оттого, что летом теплее. В скобках — сама норма для выбранного периода: "
+    "нормы месяцев, усреднённые по его дням (для лета — летняя, для целого года "
+    "почти совпадает с годовой).\n\n"
+    + _NORM_FALLBACK
 )
 HELP_ABS_MAX = (
-    "Наибольшая суточная максимальная температура за период и дата, когда она "
-    "наблюдалась (если таких дней несколько — самый ранний). "
-    + _DAILY_EXTREME_SOURCE.format(which="наибольшая", column="Tx", direction="уступать")
+    _EXTREME_PERIOD.format(caption="Самая высокая")
+    + "\n\n"
+    + _DAILY_EXTREME_SOURCE.format(what="максимальная", which="самое высокое", column="Tx",
+                                   peak="пик", direction="ниже")
 )
 HELP_ABS_MIN = (
-    "Наименьшая суточная минимальная температура за период и дата, когда она "
-    "наблюдалась (если таких дней несколько — самый ранний). "
-    + _DAILY_EXTREME_SOURCE.format(which="наименьшая", column="Tn", direction="превышать")
+    _EXTREME_PERIOD.format(caption="Самая низкая")
+    + "\n\n"
+    + _DAILY_EXTREME_SOURCE.format(what="минимальная", which="самое низкое", column="Tn",
+                                   peak="минимум", direction="выше")
 )
 HELP_COMPLETENESS = (
     "Доля календарных дней периода, за которые есть суточная средняя температура: "
@@ -154,15 +185,19 @@ _YEAR_RECORD = (
     "Год с {which} среднегодовой температурой среди полных лет, целиком попавших в "
     "период. Среднегодовая — среднее суточных средних за год. "
     + _COMPLETE_YEAR
-    + "\n\nОтклонение — от годовой нормы: средней температуры по всем полным годам "
-    "архива станции."
+    + "\n\nОтклонение — от годовой нормы. "
+    + _NORM_WHAT
+    + "\n\n"
+    + _NORM_FALLBACK
 )
 _MONTH_RECORD = (
     "Месяц с {which} средней температурой среди полных месяцев, целиком попавших в "
     "период. Средняя месяца — среднее суточных средних за месяц. "
     + _COMPLETE_MONTH
-    + "\n\nОтклонение — от нормы этого календарного месяца. "
-    + _MONTH_NORM
+    + "\n\nОтклонение — от нормы этого месяца (июль сравнивается с нормой июля). "
+    + _NORM_WHAT
+    + "\n\n"
+    + _NORM_FALLBACK
 )
 HELP_WARMEST_YEAR = _YEAR_RECORD.format(which="наибольшей")
 HELP_COLDEST_YEAR = _YEAR_RECORD.format(which="наименьшей")
@@ -172,6 +207,15 @@ HELP_COLDEST_MONTH = _MONTH_RECORD.format(which="наименьшей")
 
 def _format_day(day: date) -> str:
     return f"{day:%d.%m.%Y}"
+
+
+def _format_days(days: tuple[date, ...]) -> str:
+    """Даты рекорда через запятую. Больше MAX_LISTED_DAYS — первые и "и ещё N
+    дн.": иначе на длинном архиве карточка могла бы вытянуться на пол-экрана
+    и растянуть весь ряд карточек."""
+    shown = ", ".join(_format_day(d) for d in days[:MAX_LISTED_DAYS])
+    rest = len(days) - MAX_LISTED_DAYS
+    return f"{shown} и ещё {rest} дн." if rest > 0 else shown
 
 
 def _format_count(value: int) -> str:
@@ -187,6 +231,14 @@ class CardText:
     help: str = ""
 
 
+def _norm_name(data: DashboardData, month: int | None = None) -> str:
+    """С чем сравнивали — в родительном падеже для describe_anomaly. При
+    откате на весь архив это не норма ВМО, и подпись этого не скрывает."""
+    if data.norm_standard:
+        return f"нормы {MONTHS_GENITIVE[month - 1]}" if month else f"нормы {_NORM_BASE}"
+    return f"средней {MONTHS_GENITIVE[month - 1]} по архиву" if month else "средней по архиву"
+
+
 def card_texts(data: DashboardData) -> list[CardText]:
     """Тексты восьми карточек по порядку: средняя, максимум, минимум,
     полнота; тёплый/холодный год, тёплый/холодный месяц. Отдельно от
@@ -197,13 +249,16 @@ def card_texts(data: DashboardData) -> list[CardText]:
         mean = CardText("Средняя суточная температура за период", format_temperature(data.period_mean),
                         "норма не рассчитана: нет полных месяцев")
     else:
-        mean = CardText("Средняя суточная температура за период", format_temperature(data.period_mean),
-                        describe_anomaly(data.period_anomaly))
+        # Значение нормы в скобках — чтобы цифра была перед глазами, а не только "выше/ниже"
+        note = describe_anomaly(data.period_anomaly, _norm_name(data))
+        if data.period_norm is not None:
+            note += f" ({format_temperature(data.period_norm)})"
+        mean = CardText("Средняя суточная температура за период", format_temperature(data.period_mean), note)
 
     def extreme(caption: str, record) -> CardText:
         if record is None:
             return CardText(caption, _NO_VALUE, "нет данных в периоде")
-        return CardText(caption, format_temperature(record.value), _format_day(record.day))
+        return CardText(caption, format_temperature(record.value), _format_days(record.days))
 
     missing = data.days_total - data.days_with_data
     share = data.days_with_data / data.days_total * 100 if data.days_total else 0.0
@@ -218,20 +273,20 @@ def card_texts(data: DashboardData) -> list[CardText]:
         if record is None:
             return CardText(caption, _NO_VALUE, "нет полных лет в периоде")
         return CardText(caption, str(record.year),
-                        f"{format_temperature(record.value)}, {describe_anomaly(record.anomaly)}")
+                        f"{format_temperature(record.value)}, {describe_anomaly(record.anomaly, _norm_name(data))}")
 
     def month(caption: str, record: MonthRecord | None) -> CardText:
         if record is None:
             return CardText(caption, _NO_VALUE, "нет полных месяцев в периоде")
         note = format_temperature(record.value)
         if record.anomaly is not None:
-            note += ", " + describe_anomaly(record.anomaly, f"нормы {MONTHS_GENITIVE[record.month - 1]}")
+            note += ", " + describe_anomaly(record.anomaly, _norm_name(data, record.month))
         return CardText(caption, f"{MONTHS_NOMINATIVE[record.month - 1].capitalize()} {record.year}", note)
 
     cards = [
         (mean, HELP_MEAN),
-        (extreme("Абсолютный максимум", data.abs_max), HELP_ABS_MAX),
-        (extreme("Абсолютный минимум", data.abs_min), HELP_ABS_MIN),
+        (extreme("Абсолютный максимум за период", data.abs_max), HELP_ABS_MAX),
+        (extreme("Абсолютный минимум за период", data.abs_min), HELP_ABS_MIN),
         (completeness, HELP_COMPLETENESS),
         (year("Самый тёплый год", data.warmest_year), HELP_WARMEST_YEAR),
         (year("Самый холодный год", data.coldest_year), HELP_COLDEST_YEAR),
@@ -247,10 +302,17 @@ def anomaly_note(data: DashboardData) -> str:
     if norm is None:
         return "Норма не рассчитана: у станции нет ни одного полного года."
     years = f"{norm.first_year}–{norm.last_year}" if norm.first_year != norm.last_year else str(norm.first_year)
-    text = (
-        f"Норма {format_temperature(norm.value)} — средняя за {norm.year_count} полн. лет ({years}) "
-        "всего архива станции. Показаны только полные годы."
-    )
+    if norm.standard:
+        text = (
+            f"Норма {format_temperature(norm.value)} — средняя за {norm.year_count} полн. лет "
+            f"базового периода ВМО {_NORM_BASE}. Показаны только полные годы."
+        )
+    else:
+        text = (
+            f"За {_NORM_BASE} меньше {MIN_NORM_BASE_YEARS} полных лет, поэтому нулевая линия — "
+            f"средняя по архиву {format_temperature(norm.value)} за {norm.year_count} полн. лет ({years}). "
+            "Показаны только полные годы."
+        )
     if data.year_anomalies and data.trend is None:
         text += f" Линия тренда — от {MIN_TREND_YEARS} полных лет в периоде."
     return text

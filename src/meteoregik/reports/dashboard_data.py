@@ -12,10 +12,16 @@ Qt-независимо — тот же принцип, что у reports/aggreg
 больше 3 подряд), год — если полны все 12 месяцев. Неполные месяцы на
 теплокарте показываются, но помечаются (MonthCell.complete).
 
-Норма — по всей истории станции, а не только по выбранному периоду: иначе
-"отклонение от нормы" за период из одного года было бы всегда нулевым.
-Месячная норма — средняя по полным месяцам этого календарного месяца,
-годовая — средняя по полным годам. Отклонение средней за период от нормы
+Норма — стандартная климатическая норма ВМО за 1991–2020 (WMO-No. 1203),
+одна для всех лет и любого выбранного периода: норма "своего десятилетия"
+для каждого года ломала бы ряд аномалий ступеньками и съедала бы тренд.
+По ВМО норма пригодна, если в 30-летии есть хотя бы 24 года данных, — здесь
+это 24 ПОЛНЫХ года. Если у станции их меньше, норма считается по всей
+истории станции (подписывается на экране как "средняя по архиву"): тогда
+сравнение всего архива с ней почти всегда даёт "на уровне" — данные
+сравниваются сами с собой, но другого ориентира у такой станции нет.
+Месячная норма — средняя по полным месяцам этого календарного месяца внутри
+базы, годовая — средняя по полным годам базы. Отклонение средней за период от нормы
 считается по дням: (суточная средняя − норма её календарного месяца),
 усреднённая по дням периода, — так оно корректно для любого периода, в т.ч.
 неполного года или одного сезона (сравнение летнего периода с годовой нормой
@@ -47,6 +53,12 @@ PARAMETER = "T"
 MAX_MISSING_DAYS = 5
 MAX_MISSING_RUN = 3
 
+# Базовый период нормы ВМО и минимум полных лет в нём (80 % из 30), чтобы
+# норму можно было считать по нему, а не по всему архиву.
+NORM_BASE_FIRST_YEAR = 1991
+NORM_BASE_LAST_YEAR = 2020
+MIN_NORM_BASE_YEARS = 24
+
 # Меньше точек — линия тренда по ним ничего не говорит (одна-две аномалии
 # дают "тренд" любого знака), поэтому тренд не строится.
 MIN_TREND_YEARS = 5
@@ -61,8 +73,10 @@ class DayTemps:
 
 @dataclass(frozen=True)
 class DatedValue:
+    """Рекорд и все дни, когда он наблюдался (по возрастанию дат)."""
+
     value: float
-    day: date
+    days: tuple[date, ...]
 
 
 @dataclass(frozen=True)
@@ -115,6 +129,7 @@ class NormInfo:
     first_year: int
     last_year: int
     year_count: int
+    standard: bool  # True — база ВМО 1991–2020, False — откат на весь архив
 
 
 @dataclass(frozen=True)
@@ -136,6 +151,10 @@ class DashboardData:
     year_anomalies: list[YearAnomaly] = field(default_factory=list)
     trend: Trend | None = None
     annual_norm: NormInfo | None = None
+    # Норма, с которой сравнивалась средняя за период (среднее норм месяцев по дням периода)
+    period_norm: float | None = None
+    # Отдельно от annual_norm: месячные нормы бывают и без единого полного года
+    norm_standard: bool = True
 
     @property
     def has_data(self) -> bool:
@@ -252,12 +271,27 @@ def _days_with_avg_by_month(days: dict[date, DayTemps]) -> dict[tuple[int, int],
 
 
 def _extreme(days: list[tuple[date, float]], *, highest: bool) -> DatedValue | None:
-    """Рекорд с самой ранней датой среди равных значений."""
+    """Рекорд и все дни с ним: одинаковый максимум в разные дни — обычное
+    дело (значения с точностью 0.1 °C), и показать только один день значило
+    бы молча выбрать "победителя"."""
     if not days:
         return None
     best = max(v for _, v in days) if highest else min(v for _, v in days)
-    first_day = min(d for d, v in days if v == best)
-    return DatedValue(best, first_day)
+    return DatedValue(best, tuple(sorted(d for d, v in days if v == best)))
+
+
+def _norm_base(
+    complete_months: set[tuple[int, int]], complete_years: set[int]
+) -> tuple[bool, set[tuple[int, int]], list[int]]:
+    """По каким полным месяцам и годам считать норму: база ВМО 1991–2020,
+    если в ней не меньше MIN_NORM_BASE_YEARS полных лет, иначе весь архив.
+    Решение одно на станцию — месячные и годовая нормы из одной базы, иначе
+    отклонения на соседних карточках отсчитывались бы от разного."""
+    base_years = sorted(y for y in complete_years if NORM_BASE_FIRST_YEAR <= y <= NORM_BASE_LAST_YEAR)
+    if len(base_years) >= MIN_NORM_BASE_YEARS:
+        base_months = {key for key in complete_months if NORM_BASE_FIRST_YEAR <= key[0] <= NORM_BASE_LAST_YEAR}
+        return True, base_months, base_years
+    return False, complete_months, sorted(complete_years)
 
 
 def compute_dashboard(
@@ -275,15 +309,15 @@ def compute_dashboard(
         year for year in years if all((year, month) in complete_months for month in range(1, 13))
     }
 
+    norm_standard, norm_months, norm_years = _norm_base(complete_months, complete_years)
     month_norms: dict[int, float] = {}
     for month in range(1, 13):
-        values = [months[key] for key in complete_months if key[1] == month]
+        values = [months[key] for key in norm_months if key[1] == month]
         if values:
             month_norms[month] = fmean(values)
 
-    norm_years = sorted(complete_years)
     annual_norm = (
-        NormInfo(fmean(years[y] for y in norm_years), norm_years[0], norm_years[-1], len(norm_years))
+        NormInfo(fmean(years[y] for y in norm_years), norm_years[0], norm_years[-1], len(norm_years), norm_standard)
         if norm_years
         else None
     )
@@ -294,6 +328,10 @@ def compute_dashboard(
     period_mean = fmean(v for _, v in avgs) if avgs else None
     deviations = [v - month_norms[d.month] for d, v in avgs if d.month in month_norms]
     period_anomaly = fmean(deviations) if deviations else None
+    # Норма "для этого периода" — по тем же дням, что и отклонение: для лета
+    # это летняя норма, для целого года — почти годовая.
+    period_norms = [month_norms[d.month] for d, _ in avgs if d.month in month_norms]
+    period_norm = fmean(period_norms) if period_norms else None
     abs_max = _extreme([(d, t.max) for d, t in period_days if t.max is not None], highest=True)
     abs_min = _extreme([(d, t.min) for d, t in period_days if t.min is not None], highest=False)
 
@@ -320,7 +358,7 @@ def compute_dashboard(
     # --- годы: аномалии и тренд (полные годы целиком внутри периода) ---
     year_anomalies: list[YearAnomaly] = []
     if annual_norm is not None:
-        for year in norm_years:
+        for year in sorted(complete_years):  # все полные годы, не только годы базы нормы
             if date_from <= date(year, 1, 1) and date(year, 12, 31) <= date_to:
                 year_anomalies.append(YearAnomaly(year, years[year], years[year] - annual_norm.value))
 
@@ -331,6 +369,7 @@ def compute_dashboard(
         days_with_data=len(avgs),
         period_mean=period_mean,
         period_anomaly=period_anomaly,
+        period_norm=period_norm,
         abs_max=abs_max,
         abs_min=abs_min,
         warmest_year=max(year_anomalies, key=lambda y: y.value, default=None),
@@ -342,6 +381,7 @@ def compute_dashboard(
         year_anomalies=year_anomalies,
         trend=linear_trend([(y.year, y.anomaly) for y in year_anomalies]),
         annual_norm=annual_norm,
+        norm_standard=norm_standard,
     )
 
 

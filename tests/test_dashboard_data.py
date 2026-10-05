@@ -96,6 +96,43 @@ def test_norm_anomalies_and_records_use_complete_years():
     assert data.coldest_month.anomaly == pytest.approx(-20.0 - (4 + 6 + 8 + -20) / 4)
 
 
+def test_norm_uses_wmo_base_period_when_enough_complete_years():
+    """24+ полных лет в 1991–2020 — норма только по ним; годы вне базы
+    (1985, 2021) всё равно получают аномалию от этой же нормы."""
+    days = _full_year(1985, 0.0) | _full_year(2021, 10.0)
+    for year in range(1991, 2015):  # ровно 24 полных года базы, все по 5 °C
+        days |= _full_year(year, 5.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(1985, 1, 1), date(2021, 12, 31))
+
+    assert data.norm_standard
+    assert data.annual_norm.value == pytest.approx(5.0)
+    assert (data.annual_norm.first_year, data.annual_norm.last_year, data.annual_norm.year_count) == (1991, 2014, 24)
+    anomalies = {y.year: y.anomaly for y in data.year_anomalies}
+    assert anomalies[1985] == pytest.approx(-5.0)
+    assert anomalies[2021] == pytest.approx(5.0)
+    assert (data.coldest_year.year, data.warmest_year.year) == (1985, 2021)
+    # весь архив больше не "на уровне нормы" сам с собой
+    assert data.period_anomaly == pytest.approx((-5.0 * 365 + 5.0 * 365) / (26 * 365 + 6), abs=0.01)
+
+    one_year = compute_dashboard(days, months, years, date(1985, 1, 1), date(1985, 12, 31))
+    assert one_year.period_anomaly == pytest.approx(-5.0)
+
+
+def test_norm_falls_back_to_archive_with_too_few_base_years():
+    days = _full_year(1985, 0.0)
+    for year in range(1991, 2014):  # 23 полных года базы — мало
+        days |= _full_year(year, 5.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(1985, 1, 1), date(2013, 12, 31))
+
+    assert not data.norm_standard and not data.annual_norm.standard
+    assert (data.annual_norm.first_year, data.annual_norm.year_count) == (1985, 24)
+    assert data.annual_norm.value == pytest.approx(5.0 * 23 / 24)
+
+
 def test_period_anomaly_is_against_calendar_month_norm():
     """Период из одного месяца сравнивается с нормой этого месяца, а не с
     годовой."""
@@ -109,12 +146,13 @@ def test_period_anomaly_is_against_calendar_month_norm():
 
     assert data.period_mean == pytest.approx(21.0)
     assert data.period_anomaly == pytest.approx(1.0)  # норма июля = 20.0
+    assert data.period_norm == pytest.approx(20.0)
     assert data.days_total == data.days_with_data == 31
     assert data.year_anomalies == []  # ни один год не лежит в периоде целиком
     assert list(data.month_cells) == [(2020, 7)]
 
 
-def test_extremes_take_earliest_date_among_equal_values():
+def test_extremes_list_all_dates_with_equal_values():
     days = _full_year(2020, 5.0)
     days[date(2020, 3, 1)] = DayTemps(5.0, -30.0, 10.0)
     days[date(2020, 7, 10)] = DayTemps(25.0, 15.0, 35.0)
@@ -123,8 +161,12 @@ def test_extremes_take_earliest_date_among_equal_values():
 
     data = compute_dashboard(days, months, years, date(2020, 1, 1), date(2020, 12, 31))
 
-    assert (data.abs_max.value, data.abs_max.day) == (35.0, date(2020, 7, 10))
-    assert (data.abs_min.value, data.abs_min.day) == (-30.0, date(2020, 3, 1))
+    assert (data.abs_max.value, data.abs_max.days) == (35.0, (date(2020, 7, 10), date(2020, 8, 2)))
+    assert (data.abs_min.value, data.abs_min.days) == (-30.0, (date(2020, 3, 1),))
+
+    # рекорд — только по дням выбранного периода, не по всему архиву
+    june = compute_dashboard(days, months, years, date(2020, 6, 1), date(2020, 6, 30))
+    assert june.abs_max.value == 10.0 and len(june.abs_max.days) == 30
 
 
 def test_incomplete_month_is_shown_but_marked_and_not_a_record():
