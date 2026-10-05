@@ -242,6 +242,37 @@ def heat_grid_of(dialog):
     return dialog.heatmap._grid
 
 
+def test_anomaly_chart_years_axis_has_whole_years(tmp_path, messages):
+    """2–3 года — раньше ось подписывалась "−1, 0, +2.02e3"."""
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.apply_btn.click()
+
+    ax = dialog.anomaly_chart._ax
+    assert [t.get_text() for t in ax.get_xticklabels()] == ["2019", "2020"]
+    assert dialog._anomaly_title.text() == "Отклонение среднегодовой температуры от нормы"
+
+
+def test_anomaly_chart_short_period_is_by_months(tmp_path, messages):
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.date_from_edit.set_date(date(2019, 11, 1))
+    dialog.date_to_edit.set_date(date(2020, 2, 29))
+    dialog.apply_btn.click()
+
+    chart = dialog.anomaly_chart
+    assert [(m.year, m.month) for m in chart._months] == [(2019, 11), (2019, 12), (2020, 1), (2020, 2)]
+    # средняя по архиву для каждого месяца = 1.0: 2019 — 0 °C, 2020 — 2 °C
+    assert [m.anomaly for m in chart._months] == pytest.approx([-1.0, -1.0, 1.0, 1.0])
+    labels = [t.get_text() for t in chart._ax.get_xticklabels()]
+    assert labels == ["ноя 2019", "дек", "янв 2020", "фев"]
+    assert all(t.get_rotation() == 60 for t in chart._ax.get_xticklabels())
+    assert dialog._anomaly_title.text() == "Отклонение среднемесячной температуры от нормы"
+    assert dialog._anomaly_note.text().startswith("Период короче 24 месяцев")
+
+
 def test_heat_cell_tooltip_shows_value_and_anomaly():
     cell = MonthCell(2020, 1, -3.5, 25, 31, complete=False, norm=-6.0)
     assert heat_cell_tooltip("Январь 2020", cell) == (

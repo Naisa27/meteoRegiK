@@ -459,8 +459,24 @@ def card_texts(data: DashboardData) -> list[CardText]:
     return [replace(text, help=help_text) for text, help_text in cards]
 
 
+def anomaly_title(data: DashboardData) -> str:
+    """Короткий период — график по месяцам (см. AnomalyChart)."""
+    kind = "среднемесячной" if data.short_period else "среднегодовой"
+    return f"Отклонение {kind} температуры от нормы"
+
+
 def anomaly_note(data: DashboardData) -> str:
     """Пояснение под заголовком графика аномалий — от чего отсчитано."""
+    if data.short_period:
+        base = (
+            f"нормы этого месяца за {_NORM_BASE}" if data.norm_standard
+            else f"средней этого месяца по архиву станции (за {_NORM_BASE} меньше "
+            f"{MIN_NORM_BASE_YEARS} полных лет)"
+        )
+        return (
+            f"Период короче {MIN_YEAR_RECORD_MONTHS} месяцев, поэтому по месяцам: столбик — "
+            f"отклонение средней месяца от {base}."
+        )
     norm = data.annual_norm
     if norm is None:
         return "Норма не рассчитана: у станции нет ни одного полного года."
@@ -710,8 +726,9 @@ class DashboardDialog(QDialog):
         charts.addWidget(_GrooveDivider())
         self.anomaly_chart = AnomalyChart()
         self._anomaly_note = QLabel()
+        self._anomaly_title = QLabel()  # текст — в _show(), по виду периода
         charts.addLayout(
-            self._chart_block("Отклонение среднегодовой температуры от нормы", self._anomaly_note,
+            self._chart_block(self._anomaly_title, self._anomaly_note,
                               self.anomaly_chart, centered=True),
             stretch=1,
         )
@@ -782,11 +799,11 @@ class DashboardDialog(QDialog):
 
     @staticmethod
     def _chart_block(
-        title: str, note: str | QLabel, chart: QWidget, *, centered: bool = False
+        title: str | QLabel, note: str | QLabel, chart: QWidget, *, centered: bool = False
     ) -> QVBoxLayout:
         block = QVBoxLayout()
         block.setSpacing(2)
-        title_label = QLabel(title)
+        title_label = title if isinstance(title, QLabel) else QLabel(title)
         title_label.setObjectName("chartTitle")
         block.addWidget(title_label)
         note_label = note if isinstance(note, QLabel) else QLabel(note)
@@ -894,6 +911,7 @@ class DashboardDialog(QDialog):
         )
         for card, text in zip(self.cards, card_texts(data)):
             card.set_text(text)
+        self._anomaly_title.setText(anomaly_title(data))
         self._anomaly_note.setText(anomaly_note(data))
         self._stack.setCurrentWidget(self._content)
         self._update_heatmap_texts(data.short_period)

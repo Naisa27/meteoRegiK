@@ -27,7 +27,6 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.colors import CenteredNorm, LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch, Rectangle
-from matplotlib.ticker import MaxNLocator
 from numpy import ma
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QToolTip, QVBoxLayout, QWidget
@@ -287,37 +286,81 @@ class TemperatureHeatmap(_ChartCanvas):
         return heat_cell_tooltip(f"{MONTHS_NOMINATIVE[col].capitalize()} {grid.row_labels[row]}", None)
 
 
+def _rotate_x_labels(ax) -> None:
+    """Подписи оси X под 60°: горизонтально 18–24 месяца или десятки лет
+    наезжают друг на друга. Привязка правым краем к засечке — иначе
+    повёрнутая подпись смещается вправо от своего столбика."""
+    for label in ax.get_xticklabels():
+        label.set_rotation(60)
+        label.set_horizontalalignment("right")
+        label.set_rotation_mode("anchor")
+
+
+def month_anomaly_cells(data: DashboardData) -> list[MonthCell]:
+    """Месяцы короткого периода с отклонением от нормы — по порядку."""
+    return [data.month_cells[key] for key in sorted(data.month_cells) if data.month_cells[key].anomaly is not None]
+
+
 class AnomalyChart(_ChartCanvas):
-    """Столбики — отклонение среднегодовой от нормы, линия — тренд."""
+    """Столбики — отклонение среднегодовой от нормы, линия — тренд. Для
+    короткого периода (меньше 24 месяцев) полных лет в нём не больше одного,
+    и годовой график вырождается в один столбик во всю ширину, — поэтому
+    тогда столбики по месяцам: отклонение средней месяца от нормы этого
+    календарного месяца (неполные месяцы — со штриховкой, как на теплокарте)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._anomalies: list[YearAnomaly] = []
+        self._months: list[MonthCell] = []
         self._ax = None
 
     def plot(self, data: DashboardData) -> None:
         self.figure.clear()
-        self._anomalies = data.year_anomalies
+        self._anomalies, self._months = [], []
         ax = self._ax = self.figure.add_subplot(111)
-        if not self._anomalies:
-            self._show_message(
-                ax,
-                "В выбранном периоде нет полных лет —\nаномалии по годам построить не из чего.",
-            )
-            self.canvas.draw_idle()
-            return
+        if data.short_period:
+            self._months = month_anomaly_cells(data)
+            if not self._months:
+                self._show_message(ax, "Нет месяцев с рассчитанной нормой —\nотклонения построить не из чего.")
+                self.canvas.draw_idle()
+                return
+            self._plot_months(ax)
+        else:
+            self._anomalies = data.year_anomalies
+            if not self._anomalies:
+                self._show_message(
+                    ax,
+                    "В выбранном периоде нет полных лет —\nаномалии по годам построить не из чего.",
+                )
+                self.canvas.draw_idle()
+                return
+            self._plot_years(ax, data)
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
 
-        years = [a.year for a in self._anomalies]
-        ax.bar(years, [a.anomaly for a in self._anomalies], width=0.75,
-               color=[WARM if a.anomaly >= 0 else COLD for a in self._anomalies])
+    @staticmethod
+    def _style_bars(ax) -> None:
         ax.axhline(0, color=theme.TEXT_SECONDARY, linewidth=0.8)
         _style_axes(ax)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.grid(True, axis="y", color=theme.BORDER, linewidth=0.8)
         ax.set_axisbelow(True)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=12))
         ax.set_ylabel("Отклонение от нормы, °C", color=theme.TEXT_SECONDARY, fontsize=9)
+
+    def _plot_years(self, ax, data: DashboardData) -> None:
+        years = [a.year for a in self._anomalies]
+        ax.bar(years, [a.anomaly for a in self._anomalies], width=0.75,
+               color=[WARM if a.anomaly >= 0 else COLD for a in self._anomalies])
+        self._style_bars(ax)
+        # Подписи — только целые годы с "круглым" шагом и без научной записи:
+        # автоматический локатор на 2–3 годах давал "−1, 0, +2.02e3", а один
+        # год растягивал столбик на всю ширину — поэтому и явные границы оси.
+        step = next((s for s in _YEAR_TICK_STEPS if len(years) / s <= _MAX_YEAR_TICKS), _YEAR_TICK_STEPS[-1])
+        ticks = [y for y in range(years[0], years[-1] + 1) if y % step == 0] or [years[0]]
+        ax.set_xticks(ticks, [str(y) for y in ticks])
+        _rotate_x_labels(ax)
+        ax.set_xlim(years[0] - 0.75, years[-1] + 0.75)
 
         handles = [Patch(color=WARM, label="Теплее нормы"), Patch(color=COLD, label="Холоднее нормы")]
         if data.trend is not None:
@@ -328,11 +371,39 @@ class AnomalyChart(_ChartCanvas):
             handles.append(line)
         ax.legend(handles=handles, loc="upper left", fontsize=8, frameon=False, labelcolor=theme.TEXT_PRIMARY)
 
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
+    def _plot_months(self, ax) -> None:
+        months = self._months
+        positions = list(range(len(months)))
+        anomalies = [m.anomaly for m in months]
+        bars = ax.bar(positions, anomalies, width=0.75, color=[WARM if a >= 0 else COLD for a in anomalies])
+        for bar, cell in zip(bars, months):
+            if not cell.complete:
+                bar.set_hatch("////")
+                bar.set_edgecolor(theme.BG)
+        self._style_bars(ax)
+        # Подпись месяца — "янв", у января и первого месяца периода ещё и год
+        labels = [
+            f"{MONTHS_SHORT[m.month - 1]} {m.year}" if i == 0 or m.month == 1 else MONTHS_SHORT[m.month - 1]
+            for i, m in enumerate(months)
+        ]
+        ax.set_xticks(positions, labels)
+        ax.tick_params(axis="x", labelsize=8)
+        _rotate_x_labels(ax)
+        ax.set_xlim(-0.75, len(months) - 0.25)
+        handles = [Patch(color=WARM, label="Теплее нормы месяца"), Patch(color=COLD, label="Холоднее нормы месяца")]
+        if any(not m.complete for m in months):
+            handles.append(Patch(facecolor=theme.TEXT_SECONDARY, hatch="////", edgecolor=theme.BG,
+                                 label="Неполный месяц"))
+        ax.legend(handles=handles, loc="upper left", fontsize=8, frameon=False, labelcolor=theme.TEXT_PRIMARY)
 
     def tooltip_at(self, event: MouseEvent) -> str | None:
         if event.inaxes is not self._ax or event.xdata is None:
+            return None
+        if self._months:
+            index = round(event.xdata)
+            if 0 <= index < len(self._months):
+                cell = self._months[index]
+                return heat_cell_tooltip(f"{MONTHS_NOMINATIVE[cell.month - 1].capitalize()} {cell.year}", cell)
             return None
         year = round(event.xdata)
         for anomaly in self._anomalies:
