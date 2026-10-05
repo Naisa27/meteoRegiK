@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Callable
+from typing import Callable, Iterable
 
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QFocusEvent, QIcon
@@ -51,6 +51,9 @@ from meteoregik.reports.dashboard_data import (
     NORM_BASE_FIRST_YEAR,
     NORM_BASE_LAST_YEAR,
     DashboardData,
+    MIN_YEAR_RECORD_MONTHS,
+    MAX_MISSING_DECADE_DAYS,
+    DecadeRecord,
     MonthRecord,
     YearAnomaly,
     build_dashboard,
@@ -70,6 +73,10 @@ from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
 _TITLE = "Дашборд"
+_START_HINT = (
+    "Выберите метеостанцию и нажмите «Применить».\n"
+    "Если период не указан, берётся весь архив станции."
+)
 _NO_VALUE = "—"
 
 DASHBOARD_QSS = f"""
@@ -122,8 +129,13 @@ _COMPLETE_MONTH = (
     "3 дней подряд (правило ВМО «3/5»)."
 )
 _COMPLETE_YEAR = "Год считается полным, если полны все 12 его месяцев. " + _COMPLETE_MONTH
-# Сколько дат рекорда перечислять на карточке абс. максимума/минимума
-MAX_LISTED_DAYS = 5
+# Сколько рекордов (дат, месяцев) перечислять на карточке, дальше — "и ещё N"
+MAX_LISTED = 5
+# Месяцы/декады крупным шрифтом и их отклонения длиннее дат — их меньше, чтобы
+# карточка не обрезалась снизу в обычном по высоте окне: до MAX_LISTED_MONTHS
+# перечисляются все, больше — только первый и "и ещё N"
+MAX_LISTED_MONTHS = 2
+MAX_LISTED_MONTH_NOTES = 1
 
 _NORM_BASE = f"{NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR}"
 _NORM_WHAT = (
@@ -183,21 +195,67 @@ HELP_COMPLETENESS = (
 )
 _YEAR_RECORD = (
     "Год с {which} среднегодовой температурой среди полных лет, целиком попавших в "
-    "период. Среднегодовая — среднее суточных средних за год. "
+    "период. Если у нескольких лет средняя одинаковая, перечислены все. "
+    "Среднегодовая — среднее суточных средних за год. "
     + _COMPLETE_YEAR
-    + "\n\nОтклонение — от годовой нормы. "
+    + "\n\nОтклонение — от годовой нормы, её значение указано в скобках. "
     + _NORM_WHAT
     + "\n\n"
     + _NORM_FALLBACK
 )
 _MONTH_RECORD = (
     "Месяц с {which} средней температурой среди полных месяцев, целиком попавших в "
-    "период. Средняя месяца — среднее суточных средних за месяц. "
+    "период. Если у нескольких месяцев средняя одинаковая, перечислены все. "
+    "Средняя месяца — среднее суточных средних за месяц. "
     + _COMPLETE_MONTH
-    + "\n\nОтклонение — от нормы этого месяца (июль сравнивается с нормой июля). "
+    + "\n\nОтклонение — от нормы этого месяца (июль сравнивается с нормой июля), "
+    "её значение указано в скобках. "
     + _NORM_WHAT
     + "\n\n"
     + _NORM_FALLBACK
+)
+_ANOMALOUS_MONTH = (
+    "Месяц, который сильнее всего {which} своей нормы: каждый полный месяц периода "
+    "сравнивается с нормой того же месяца (декабрь — с нормой декабря, июль — с "
+    "нормой июля), и выбирается наибольшая разница. В отличие от карточки «Самый "
+    "{plain} месяц» здесь может оказаться и {example} — если он был необычно "
+    "{adjective} для своего времени года. Учитываются только месяцы {which} нормы; "
+    "если таких нет, карточка пустая. Если разница одинаковая у нескольких "
+    "месяцев, перечислены все.\n\nВ скобках — норма этого месяца, после неё — "
+    "средняя температура самого месяца. "
+    + _COMPLETE_MONTH
+    + "\n\n"
+    + _NORM_WHAT
+    + "\n\n"
+    + _NORM_FALLBACK
+)
+HELP_ANOMALOUS_WARM_MONTH = _ANOMALOUS_MONTH.format(
+    which="выше", plain="тёплый", example="зимний месяц", adjective="тёплым"
+)
+HELP_ANOMALOUS_COLD_MONTH = _ANOMALOUS_MONTH.format(
+    which="ниже", plain="холодный", example="летний месяц", adjective="холодным"
+)
+_DECADE_RECORD = (
+    "Выбранный период короче {months} месяцев — полных лет в нём не больше "
+    "одного, поэтому вместо самого {plain} года показывается самая {adjective} "
+    "декада. Декады — 1–10, 11–20 и 21-е — последнее число месяца. Выбирается "
+    "декада с {which} средней температурой среди полных декад, целиком "
+    "попавших в период; если у нескольких декад средняя одинаковая, "
+    "перечислены все. Средняя декады — среднее суточных средних за её дни. "
+    "Декада считается полной, если в ней пропущено не больше {missing} дней."
+    + "\n\nОтклонение — от нормы той же декады того же месяца (2-я декада июля "
+    "сравнивается с нормой 2-й декады июля), её значение указано в скобках. "
+    + _NORM_WHAT
+    + "\n\n"
+    + _NORM_FALLBACK
+)
+HELP_WARMEST_DECADE = _DECADE_RECORD.format(
+    months=MIN_YEAR_RECORD_MONTHS, plain="тёплого", adjective="тёплая", which="наибольшей",
+    missing=MAX_MISSING_DECADE_DAYS,
+)
+HELP_COLDEST_DECADE = _DECADE_RECORD.format(
+    months=MIN_YEAR_RECORD_MONTHS, plain="холодного", adjective="холодная", which="наименьшей",
+    missing=MAX_MISSING_DECADE_DAYS,
 )
 HELP_WARMEST_YEAR = _YEAR_RECORD.format(which="наибольшей")
 HELP_COLDEST_YEAR = _YEAR_RECORD.format(which="наименьшей")
@@ -209,13 +267,43 @@ def _format_day(day: date) -> str:
     return f"{day:%d.%m.%Y}"
 
 
+def _join_limited(items: list[str], sep: str, rest_unit: str, limit: int = MAX_LISTED) -> str:
+    """Список рекордов через sep. Больше MAX_LISTED — первые и "и ещё N
+    <rest_unit>": иначе на длинном архиве карточка могла бы вытянуться на
+    пол-экрана и растянуть весь ряд карточек."""
+    shown = sep.join(items[:limit])
+    rest = len(items) - limit
+    return f"{shown} и ещё {rest} {rest_unit}" if rest > 0 else shown
+
+
 def _format_days(days: tuple[date, ...]) -> str:
-    """Даты рекорда через запятую. Больше MAX_LISTED_DAYS — первые и "и ещё N
-    дн.": иначе на длинном архиве карточка могла бы вытянуться на пол-экрана
-    и растянуть весь ряд карточек."""
-    shown = ", ".join(_format_day(d) for d in days[:MAX_LISTED_DAYS])
-    rest = len(days) - MAX_LISTED_DAYS
-    return f"{shown} и ещё {rest} дн." if rest > 0 else shown
+    return _join_limited([_format_day(d) for d in days], ", ", "дн.")
+
+
+def _big_list_limit(records: tuple[object, ...]) -> int:
+    return len(records) if len(records) <= MAX_LISTED_MONTHS else 1
+
+
+def _decade_name(record: DecadeRecord, *, with_year: bool = True) -> str:
+    """"2-я декада июля 2020" (без года — для подписи нормы)."""
+    text = f"{record.number}-я декада {MONTHS_GENITIVE[record.start.month - 1]}"
+    return f"{text} {record.start.year}" if with_year else text
+
+
+def _format_decades(records: tuple[DecadeRecord, ...]) -> str:
+    text = _join_limited([_decade_name(r) for r in records], ", ", "дек.", _big_list_limit(records))
+    return text[:1].upper() + text[1:]
+
+
+def _format_months(records: tuple[MonthRecord, ...]) -> str:
+    """"Июль 2010, июль 2021" — с заглавной только первое слово строки."""
+    text = _join_limited([f"{MONTHS_NOMINATIVE[r.month - 1]} {r.year}" for r in records], ", ", "мес.", _big_list_limit(records))
+    return text[:1].upper() + text[1:]
+
+
+def _unique(texts: Iterable[str]) -> list[str]:
+    """Без повторов, с сохранением порядка."""
+    return list(dict.fromkeys(texts))
 
 
 def _format_count(value: int) -> str:
@@ -239,9 +327,17 @@ def _norm_name(data: DashboardData, month: int | None = None) -> str:
     return f"средней {MONTHS_GENITIVE[month - 1]} по архиву" if month else "средней по архиву"
 
 
+def _decade_norm_name(data: DashboardData, record: DecadeRecord) -> str:
+    """"нормы 2-й декады июля" / "средней 2-й декады июля по архиву"."""
+    name = f"{record.number}-й декады {MONTHS_GENITIVE[record.start.month - 1]}"
+    return f"нормы {name}" if data.norm_standard else f"средней {name} по архиву"
+
+
 def card_texts(data: DashboardData) -> list[CardText]:
-    """Тексты восьми карточек по порядку: средняя, максимум, минимум,
-    полнота; тёплый/холодный год, тёплый/холодный месяц. Отдельно от
+    """Тексты десяти карточек по порядку: средняя, максимум, минимум,
+    полнота; тёплый/холодный год (для периода короче 24 месяцев — декада),
+    тёплый/холодный месяц; аномально
+    тёплый/холодный месяц (правая колонка). Отдельно от
     виджетов — проверяется тестами без раскладки."""
     if data.period_mean is None:
         mean = CardText("Средняя суточная температура за период", _NO_VALUE, "нет суточных значений в периоде")
@@ -269,29 +365,80 @@ def card_texts(data: DashboardData) -> list[CardText]:
         + (f", пропущено {_format_count(missing)}" if missing else ", без пропусков"),
     )
 
-    def year(caption: str, record: YearAnomaly | None) -> CardText:
-        if record is None:
+    def year(caption: str, records: tuple[YearAnomaly, ...]) -> CardText:
+        if not records:
             return CardText(caption, _NO_VALUE, "нет полных лет в периоде")
-        return CardText(caption, str(record.year),
-                        f"{format_temperature(record.value)}, {describe_anomaly(record.anomaly, _norm_name(data))}")
+        # у всех годов-рекордсменов одна и та же средняя, а значит и отклонение
+        first = records[0]
+        note = f"{format_temperature(first.value)}, {describe_anomaly(first.anomaly, _norm_name(data))}"
+        if data.annual_norm is not None:
+            note += f" ({format_temperature(data.annual_norm.value)})"
+        return CardText(caption, ", ".join(str(r.year) for r in records), note)
 
-    def month(caption: str, record: MonthRecord | None) -> CardText:
-        if record is None:
+    def anomaly_text(record: MonthRecord) -> str:
+        """"на 2.0 °C выше нормы июля (+19.3 °C)" — с самой нормой в скобках."""
+        text = describe_anomaly(record.anomaly, _norm_name(data, record.month))
+        return text + (f" ({format_temperature(record.norm)})" if record.norm is not None else "")
+
+    def month(caption: str, records: tuple[MonthRecord, ...]) -> CardText:
+        if not records:
             return CardText(caption, _NO_VALUE, "нет полных месяцев в периоде")
-        note = format_temperature(record.value)
-        if record.anomaly is not None:
-            note += ", " + describe_anomaly(record.anomaly, _norm_name(data, record.month))
-        return CardText(caption, f"{MONTHS_NOMINATIVE[record.month - 1].capitalize()} {record.year}", note)
+        # средняя у всех одна; отклонение — своё у каждого календарного месяца
+        # (равные +21.3 °C в июле и августе — разные отклонения от разных норм)
+        note = format_temperature(records[0].value)
+        anomalies = _unique(anomaly_text(r) for r in records if r.anomaly is not None)
+        if anomalies:
+            note += ", " + _join_limited(anomalies, "; ", "мес.", MAX_LISTED_MONTH_NOTES)
+        return CardText(caption, _format_months(records), note)
+
+    def anomalous_month(caption: str, records: tuple[MonthRecord, ...], side: str) -> CardText:
+        if not records:
+            if not data.warmest_months:
+                reason = "нет полных месяцев в периоде"
+            elif all(m.anomaly is None for m in data.warmest_months + data.coldest_months):
+                reason = "норма не рассчитана"
+            else:
+                reason = f"нет месяцев {side} нормы в периоде"
+            return CardText(caption, _NO_VALUE, reason)
+        note = _join_limited(
+            _unique(f"{anomaly_text(r)}, средняя {format_temperature(r.value)}" for r in records), "; ", "мес.",
+            MAX_LISTED_MONTH_NOTES,
+        )
+        return CardText(caption, _format_months(records), note)
+
+    def decade(caption: str, records: tuple[DecadeRecord, ...]) -> CardText:
+        if not records:
+            return CardText(caption, _NO_VALUE, "нет полных декад в периоде")
+        note = format_temperature(records[0].value)
+        anomalies = _unique(
+            f"{describe_anomaly(r.anomaly, _decade_norm_name(data, r))} ({format_temperature(r.norm)})"
+            for r in records
+            if r.anomaly is not None and r.norm is not None
+        )
+        if anomalies:
+            note += ", " + _join_limited(anomalies, "; ", "дек.", MAX_LISTED_MONTH_NOTES)
+        return CardText(caption, _format_decades(records), note)
+
+    if data.short_period:
+        warm_record = (decade("Самая тёплая декада", data.warmest_decades), HELP_WARMEST_DECADE)
+        cold_record = (decade("Самая холодная декада", data.coldest_decades), HELP_COLDEST_DECADE)
+    else:
+        warm_record = (year("Самый тёплый год", data.warmest_years), HELP_WARMEST_YEAR)
+        cold_record = (year("Самый холодный год", data.coldest_years), HELP_COLDEST_YEAR)
 
     cards = [
         (mean, HELP_MEAN),
         (extreme("Абсолютный максимум за период", data.abs_max), HELP_ABS_MAX),
         (extreme("Абсолютный минимум за период", data.abs_min), HELP_ABS_MIN),
         (completeness, HELP_COMPLETENESS),
-        (year("Самый тёплый год", data.warmest_year), HELP_WARMEST_YEAR),
-        (year("Самый холодный год", data.coldest_year), HELP_COLDEST_YEAR),
-        (month("Самый тёплый месяц", data.warmest_month), HELP_WARMEST_MONTH),
-        (month("Самый холодный месяц", data.coldest_month), HELP_COLDEST_MONTH),
+        warm_record,
+        cold_record,
+        (month("Самый тёплый месяц", data.warmest_months), HELP_WARMEST_MONTH),
+        (month("Самый холодный месяц", data.coldest_months), HELP_COLDEST_MONTH),
+        (anomalous_month("Самый аномально тёплый месяц", data.anomalous_warm_months, "теплее"),
+         HELP_ANOMALOUS_WARM_MONTH),
+        (anomalous_month("Самый аномально холодный месяц", data.anomalous_cold_months, "холоднее"),
+         HELP_ANOMALOUS_COLD_MONTH),
     ]
     return [replace(text, help=help_text) for text, help_text in cards]
 
@@ -372,6 +519,9 @@ class _StatCard(QFrame):
         self.help_badge = _HelpBadge()
         self.value = QLabel()
         self.value.setObjectName("statValue")
+        # Несколько месяцев-рекордсменов крупным шрифтом в одну строку
+        # расталкивали бы колонки сетки — переносим, как подпись и примечание.
+        self.value.setWordWrap(True)
         self.note = QLabel()
         self.note.setObjectName("statNote")
         self.note.setWordWrap(True)
@@ -433,13 +583,11 @@ class DashboardDialog(QDialog):
 
         # До первого "Применить" — подсказка, что делать, а не пустые карточки.
         self._stack = QStackedWidget()
-        hint = QLabel(
-            "Выберите метеостанцию и нажмите «Применить».\n"
-            "Если период не указан, берётся весь архив станции."
-        )
-        hint.setObjectName("emptyHint")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._stack.addWidget(hint)
+        self._hint = QLabel(_START_HINT)
+        self._hint.setObjectName("emptyHint")
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint.setWordWrap(True)
+        self._stack.addWidget(self._hint)
         self._content = self._build_content()
         self._stack.addWidget(self._content)
 
@@ -502,10 +650,12 @@ class DashboardDialog(QDialog):
         cards = QGridLayout()
         cards.setHorizontalSpacing(10)
         cards.setVerticalSpacing(10)
-        self.cards = [_StatCard() for _ in range(8)]
+        self.cards = [_StatCard() for _ in range(10)]
+        # первые восемь — сетка 4 × 2, аномальные месяцы — правая колонка друг под другом
         for i, card in enumerate(self.cards):
-            cards.addWidget(card, i // 4, i % 4)
-        for col in range(4):
+            row, col = (i // 4, i % 4) if i < 8 else (i - 8, 4)
+            cards.addWidget(card, row, col)
+        for col in range(5):
             cards.setColumnStretch(col, 1)
         layout.addLayout(cards)
 
@@ -575,6 +725,7 @@ class DashboardDialog(QDialog):
         if date_from is None or date_to is None:
             bounds = station_day_bounds(self.engine, wmo_index)
             if bounds is None:
+                self._clear_results(f"{self.station_combo.currentText()}: посчитанных данных ещё нет.")
                 QMessageBox.information(self, _TITLE, "По этой станции ещё нет посчитанных данных.")
                 return
             date_from, date_to = bounds
@@ -599,6 +750,7 @@ class DashboardDialog(QDialog):
             if request_id != self._request_id:
                 return
             self._set_loading(False)
+            self._clear_results("Не удалось загрузить данные — показатели не построены.")
             QMessageBox.warning(self, _TITLE, f"Не удалось загрузить данные: {exc}")
 
         self._run(task, on_done, on_error)
@@ -627,6 +779,10 @@ class DashboardDialog(QDialog):
 
     def _show(self, applied: _AppliedFilter, data: DashboardData) -> None:
         if not data.has_data:
+            self._clear_results(
+                f"{applied.station_title}: за период {_format_day(applied.date_from)}–"
+                f"{_format_day(applied.date_to)} данных не найдено."
+            )
             QMessageBox.information(self, _TITLE, "За выбранный период данных не найдено.")
             return
         self._station_label.setText(
@@ -638,6 +794,14 @@ class DashboardDialog(QDialog):
         self._stack.setCurrentWidget(self._content)
         self.heatmap.plot(data)
         self.anomaly_chart.plot(data)
+
+    def _clear_results(self, message: str) -> None:
+        """Убрать с экрана результаты прошлой выборки: карточки и графики от
+        другой станции/периода под новым фильтром вводили бы в заблуждение.
+        Вместо них — причина, почему пусто."""
+        self._station_label.setText("")
+        self._hint.setText(message)
+        self._stack.setCurrentWidget(self._hint)
 
     # --- свернуть окно ---
 

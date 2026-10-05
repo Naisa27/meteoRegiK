@@ -14,11 +14,12 @@ hero-изображения. У всех подписей явно прозра�
 Виджет не знает про ImportDialog/DataBrowserDialog/AggregateViewDialog/engine
 напрямую (чисто декоративный экран) — при клике на кнопки испускает
 import_requested / data_browser_requested / aggregate_view_requested,
-MainWindow сам решает, что делать. Кнопки — тремя рядами по разделам
-(правка 2026-09-30), у каждого ряда подпись и своя гамма из theme.py:
-"Работа с данными" (оттенки синего — импорт, просмотр исходных и агрегатных
-данных, дашборд — dashboard_requested), "Расчёт показателей" (зелёные, кнопок пока нет) и "Справочники"
-(тёмное золото, station_directory_requested)."""
+MainWindow сам решает, что делать. Кнопки — четырьмя рядами по разделам
+(правка 2026-09-30; "Аналитика" — 2026-10-05), у каждого ряда подпись и своя
+гамма из theme.py: "Работа с данными" (оттенки синего — импорт, просмотр
+исходных и агрегатных данных), "Расчёт показателей" (зелёные, кнопок пока
+нет), "Справочники" (тёмное золото, station_directory_requested) и
+"Аналитика" (фиолетовый, дашборд — dashboard_requested)."""
 
 from __future__ import annotations
 
@@ -121,7 +122,8 @@ class GreetingWidget(QWidget):
 
         layout.addSpacing(32)
 
-        # Три ряда кнопок по разделам работы (правка 2026-09-30): у каждого
+        # Четыре ряда кнопок по разделам работы (правка 2026-09-30, четвёртый
+        # "Аналитика" — 2026-10-05): у каждого
         # ряда подпись и своя цветовая гамма (theme.*_ROW_COLORS), у кнопок
         # внутри ряда — разные оттенки этой гаммы. Раздел угадывается не
         # только по цвету, но и по подписи над рядом.
@@ -131,7 +133,6 @@ class GreetingWidget(QWidget):
                 ("Импорт данных", self.import_requested),
                 ("Просмотр исходных данных", self.data_browser_requested),
                 ("Просмотр агрегатных данных", self.aggregate_view_requested),
-                ("Дашборд", self.dashboard_requested, tinted_icon(DASHBOARD_ICON_PATH, "#FFFFFF")),
             ],
             theme.DATA_ROW_COLORS,
         )
@@ -154,6 +155,16 @@ class GreetingWidget(QWidget):
             theme.DIRECTORY_ROW_COLORS,
         )
         layout.addLayout(directory_row)
+        layout.addSpacing(18)
+
+        # Дашборд — отдельный четвёртый раздел (правка 2026-10-05): это
+        # обзор уже посчитанных данных, а не работа с сырыми данными.
+        analytics_row = self._button_row(
+            layout, "Аналитика", theme.ANALYTICS_ROW_TITLE,
+            [("Дашборд", self.dashboard_requested, tinted_icon(DASHBOARD_ICON_PATH, "#FFFFFF"))],
+            theme.ANALYTICS_ROW_COLORS,
+        )
+        layout.addLayout(analytics_row)
 
         layout.addStretch(1)
 

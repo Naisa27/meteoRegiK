@@ -37,13 +37,15 @@ Qt-независимо — тот же принцип, что у reports/aggreg
 from __future__ import annotations
 
 from calendar import monthrange
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from statistics import fmean
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
+from meteoregik.calculations.temperature import decade_bounds
 from meteoregik.db.schema import computed_indicators
 
 PARAMETER = "T"
@@ -58,6 +60,14 @@ MAX_MISSING_RUN = 3
 NORM_BASE_FIRST_YEAR = 1991
 NORM_BASE_LAST_YEAR = 2020
 MIN_NORM_BASE_YEARS = 24
+
+# Период короче стольких месяцев — вместо самого тёплого/холодного года
+# показываются декады: полных лет в нём не больше одного, и "рекорд" из
+# одного года ничего не говорит.
+MIN_YEAR_RECORD_MONTHS = 24
+# Декада (10–11 дней) считается полной, если пропущено не больше 2 дней —
+# примерно та же доля, что 5 дней из 30 в правиле "3/5" для месяца.
+MAX_MISSING_DECADE_DAYS = 2
 
 # Меньше точек — линия тренда по ним ничего не говорит (одна-две аномалии
 # дают "тренд" любого знака), поэтому тренд не строится.
@@ -97,6 +107,22 @@ class MonthRecord:
     month: int
     value: float
     anomaly: float | None  # от нормы этого календарного месяца
+    norm: float | None = None  # сама норма этого календарного месяца
+
+
+@dataclass(frozen=True)
+class DecadeRecord:
+    """Декада (1–10, 11–20, 21–конец месяца): средняя и отклонение от нормы
+    той же декады того же месяца."""
+
+    start: date  # первый день декады
+    value: float
+    anomaly: float | None
+    norm: float | None = None
+
+    @property
+    def number(self) -> int:
+        return (self.start.day - 1) // 10 + 1
 
 
 @dataclass(frozen=True)
@@ -142,10 +168,20 @@ class DashboardData:
     period_anomaly: float | None
     abs_max: DatedValue | None
     abs_min: DatedValue | None
-    warmest_year: YearAnomaly | None
-    coldest_year: YearAnomaly | None
-    warmest_month: MonthRecord | None
-    coldest_month: MonthRecord | None
+    # Все годы с рекордной средней (равные значения — все, по возрастанию лет);
+    # пустой кортеж — нет полных лет в периоде
+    warmest_years: tuple[YearAnomaly, ...]
+    coldest_years: tuple[YearAnomaly, ...]
+    # Месяцы — тоже все с рекордным значением: по абсолютной средней и по
+    # отклонению от нормы своего календарного месяца
+    warmest_months: tuple[MonthRecord, ...]
+    coldest_months: tuple[MonthRecord, ...]
+    anomalous_warm_months: tuple[MonthRecord, ...] = ()
+    anomalous_cold_months: tuple[MonthRecord, ...] = ()
+    # Период короче MIN_YEAR_RECORD_MONTHS — карточки годов показывают декады
+    short_period: bool = False
+    warmest_decades: tuple[DecadeRecord, ...] = ()
+    coldest_decades: tuple[DecadeRecord, ...] = ()
     years: list[int] = field(default_factory=list)  # строки теплокарты
     month_cells: dict[tuple[int, int], MonthCell] = field(default_factory=dict)
     year_anomalies: list[YearAnomaly] = field(default_factory=list)
@@ -280,6 +316,46 @@ def _extreme(days: list[tuple[date, float]], *, highest: bool) -> DatedValue | N
     return DatedValue(best, tuple(sorted(d for d, v in days if v == best)))
 
 
+def _ties[T](items: list[T], key: Callable[[T], float], *, highest: bool) -> tuple[T, ...]:
+    """Все записи с рекордным значением, в исходном (хронологическом)
+    порядке, — как и у абсолютных экстремумов, при равенстве не выбираем
+    "победителя" молча. Сравнение — с точностью хранения (2 знака): аномалии
+    месяцев — разности float, и "равные" для пользователя значения могли бы
+    отличаться в последних битах."""
+    if not items:
+        return ()
+    rounded = [round(key(item), 2) for item in items]
+    best = max(rounded) if highest else min(rounded)
+    return tuple(item for item, value in zip(items, rounded) if value == best)
+
+
+def _add_months(day: date, months: int) -> date:
+    """Тот же день через months месяцев (31.01 + 1 → 28/29.02)."""
+    total = day.year * 12 + day.month - 1 + months
+    year, month = divmod(total, 12)
+    return date(year, month + 1, min(day.day, monthrange(year, month + 1)[1]))
+
+
+def is_short_period(date_from: date, date_to: date) -> bool:
+    """Период короче MIN_YEAR_RECORD_MONTHS месяцев: 01.01.2019–31.12.2020 —
+    ровно 24 месяца (не короткий), на день меньше — короткий."""
+    return date_to < _add_months(date_from, MIN_YEAR_RECORD_MONTHS) - timedelta(days=1)
+
+
+def _decade_averages(days: dict[date, DayTemps]) -> dict[date, tuple[float, bool]]:
+    """Средняя каждой декады по суточным средним (как decade в
+    calculations/temperature.py, с тем же округлением) и её полнота."""
+    by_decade: dict[date, list[float]] = {}
+    for day, temps in days.items():
+        if temps.avg is not None:
+            by_decade.setdefault(decade_bounds(day)[0], []).append(temps.avg)
+    result: dict[date, tuple[float, bool]] = {}
+    for start, values in by_decade.items():
+        length = (decade_bounds(start)[1] - start).days + 1
+        result[start] = (round(fmean(values), 2), length - len(values) <= MAX_MISSING_DECADE_DAYS)
+    return result
+
+
 def _norm_base(
     complete_months: set[tuple[int, int]], complete_years: set[int]
 ) -> tuple[bool, set[tuple[int, int]], list[int]]:
@@ -353,7 +429,23 @@ def compute_dashboard(
             )
             if value is not None and key in complete_months and date_from <= start and end <= date_to:
                 norm = month_norms.get(month)
-                inside_months.append(MonthRecord(year, month, value, value - norm if norm is not None else None))
+                inside_months.append(
+                    MonthRecord(year, month, value, value - norm if norm is not None else None, norm)
+                )
+
+    # --- декады: рекорды для короткого периода (полные декады целиком внутри) ---
+    decade_avgs = _decade_averages(days)
+    decade_norm_values: dict[tuple[int, int], list[float]] = {}
+    for start, (value, complete) in decade_avgs.items():
+        if complete and (start.year, start.month) in norm_months:
+            decade_norm_values.setdefault((start.month, start.day), []).append(value)
+    decade_norms = {key: fmean(values) for key, values in decade_norm_values.items()}
+    inside_decades: list[DecadeRecord] = []
+    for start in sorted(decade_avgs):
+        value, complete = decade_avgs[start]
+        if complete and date_from <= start and decade_bounds(start)[1] <= date_to:
+            norm = decade_norms.get((start.month, start.day))
+            inside_decades.append(DecadeRecord(start, value, value - norm if norm is not None else None, norm))
 
     # --- годы: аномалии и тренд (полные годы целиком внутри периода) ---
     year_anomalies: list[YearAnomaly] = []
@@ -372,10 +464,23 @@ def compute_dashboard(
         period_norm=period_norm,
         abs_max=abs_max,
         abs_min=abs_min,
-        warmest_year=max(year_anomalies, key=lambda y: y.value, default=None),
-        coldest_year=min(year_anomalies, key=lambda y: y.value, default=None),
-        warmest_month=max(inside_months, key=lambda m: m.value, default=None),
-        coldest_month=min(inside_months, key=lambda m: m.value, default=None),
+        warmest_years=_ties(year_anomalies, lambda y: y.value, highest=True),
+        coldest_years=_ties(year_anomalies, lambda y: y.value, highest=False),
+        warmest_months=_ties(inside_months, lambda m: m.value, highest=True),
+        coldest_months=_ties(inside_months, lambda m: m.value, highest=False),
+        # "аномально тёплый" — только среди месяцев выше нормы, иначе в
+        # сплошь холодном периоде им оказался бы месяц "на 0.3 °C ниже нормы"
+        anomalous_warm_months=_ties(
+            [m for m in inside_months if m.anomaly is not None and round(m.anomaly, 1) > 0],
+            lambda m: m.anomaly, highest=True,
+        ),
+        short_period=is_short_period(date_from, date_to),
+        warmest_decades=_ties(inside_decades, lambda d: d.value, highest=True),
+        coldest_decades=_ties(inside_decades, lambda d: d.value, highest=False),
+        anomalous_cold_months=_ties(
+            [m for m in inside_months if m.anomaly is not None and round(m.anomaly, 1) < 0],
+            lambda m: m.anomaly, highest=False,
+        ),
         years=sorted({year for year, _ in month_cells}),
         month_cells=month_cells,
         year_anomalies=year_anomalies,

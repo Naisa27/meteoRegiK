@@ -14,6 +14,7 @@ from meteoregik.db.session import get_engine
 from meteoregik.reports.dashboard_data import (
     DashboardData,
     DatedValue,
+    DecadeRecord,
     MonthRecord,
     NormInfo,
     YearAnomaly,
@@ -62,10 +63,12 @@ def test_card_texts_for_full_data():
         period_norm=5.44,
         abs_max=DatedValue(35.2, (date(2019, 7, 12), date(2020, 8, 3))),
         abs_min=DatedValue(-31.0, (date(2018, 2, 1),)),
-        warmest_year=YearAnomaly(2020, 7.4, 1.6),
-        coldest_year=YearAnomaly(2018, 4.9, -0.9),
-        warmest_month=MonthRecord(2019, 7, 21.3, 2.0),
-        coldest_month=MonthRecord(2018, 2, -12.0, None),
+        warmest_years=(YearAnomaly(2020, 7.4, 1.6),),
+        coldest_years=(YearAnomaly(2016, 4.9, -0.9), YearAnomaly(2018, 4.9, -0.9)),
+        warmest_months=(MonthRecord(2019, 7, 21.3, 2.0, 19.3), MonthRecord(2020, 8, 21.3, 2.8, 18.5)),
+        coldest_months=(MonthRecord(2018, 2, -12.0, None),),
+        anomalous_warm_months=(MonthRecord(2019, 12, 1.7, 7.8, -6.1),),
+        anomalous_cold_months=(),
     )
     texts = [(t.caption, t.value, t.note) for t in card_texts(data)]
     assert texts == [
@@ -74,9 +77,13 @@ def test_card_texts_for_full_data():
         ("Абсолютный минимум за период", "−31.0 °C", "01.02.2018"),
         ("Полнота данных", "99.5 %", "1 090 из 1 096 дн., пропущено 6"),
         ("Самый тёплый год", "2020", "+7.4 °C, на 1.6 °C выше нормы 1991–2020"),
-        ("Самый холодный год", "2018", "+4.9 °C, на 0.9 °C ниже нормы 1991–2020"),
-        ("Самый тёплый месяц", "Июль 2019", "+21.3 °C, на 2.0 °C выше нормы июля"),
+        ("Самый холодный год", "2016, 2018", "+4.9 °C, на 0.9 °C ниже нормы 1991–2020"),
+        ("Самый тёплый месяц", "Июль 2019, август 2020",
+         "+21.3 °C, на 2.0 °C выше нормы июля (+19.3 °C) и ещё 1 мес."),
         ("Самый холодный месяц", "Февраль 2018", "−12.0 °C"),
+        ("Самый аномально тёплый месяц", "Декабрь 2019",
+         "на 7.8 °C выше нормы декабря (−6.1 °C), средняя +1.7 °C"),
+        ("Самый аномально холодный месяц", "—", "нет месяцев холоднее нормы в периоде"),
     ]
 
 
@@ -85,15 +92,34 @@ def test_card_texts_name_archive_mean_when_no_standard_norm():
     data = DashboardData(
         date_from=date(2018, 1, 1), date_to=date(2020, 12, 31), days_total=1096, days_with_data=1096,
         period_mean=6.0, period_anomaly=0.01, abs_max=None, abs_min=None,
-        warmest_year=YearAnomaly(2020, 7.4, 1.6), coldest_year=None,
-        warmest_month=MonthRecord(2019, 7, 21.3, 2.0), coldest_month=None,
+        warmest_years=(YearAnomaly(2020, 7.4, 1.6),), coldest_years=(),
+        warmest_months=(MonthRecord(2019, 7, 21.3, 2.0, 19.3),), coldest_months=(),
         annual_norm=NormInfo(5.8, 2018, 2020, 3, standard=False), norm_standard=False,
     )
     texts = card_texts(data)
     assert texts[0].note == "на уровне средней по архиву"
-    assert texts[4].note == "+7.4 °C, на 1.6 °C выше средней по архиву"
-    assert texts[6].note == "+21.3 °C, на 2.0 °C выше средней июля по архиву"
+    assert texts[4].note == "+7.4 °C, на 1.6 °C выше средней по архиву (+5.8 °C)"
+    assert texts[6].note == "+21.3 °C, на 2.0 °C выше средней июля по архиву (+19.3 °C)"
     assert anomaly_note(data).startswith("За 1991–2020 меньше 24 полных лет")
+
+
+def test_short_period_shows_decades_instead_of_years():
+    data = DashboardData(
+        date_from=date(2020, 1, 1), date_to=date(2020, 12, 31), days_total=366, days_with_data=366,
+        period_mean=None, period_anomaly=None, abs_max=None, abs_min=None,
+        warmest_years=(YearAnomaly(2020, 7.4, 1.6),), coldest_years=(),
+        warmest_months=(), coldest_months=(),
+        short_period=True,
+        warmest_decades=(DecadeRecord(date(2020, 7, 11), 22.4, 2.1, 20.3),),
+        coldest_decades=(),
+    )
+    texts = card_texts(data)
+    assert (texts[4].caption, texts[4].value, texts[4].note) == (
+        "Самая тёплая декада", "2-я декада июля 2020",
+        "+22.4 °C, на 2.1 °C выше нормы 2-й декады июля (+20.3 °C)",
+    )
+    assert (texts[5].caption, texts[5].note) == ("Самая холодная декада", "нет полных декад в периоде")
+    assert "короче 24 месяцев" in texts[4].help
 
 
 def test_extreme_card_shortens_long_list_of_dates():
@@ -101,7 +127,7 @@ def test_extreme_card_shortens_long_list_of_dates():
     data = DashboardData(
         date_from=date(2020, 1, 1), date_to=date(2020, 12, 31), days_total=366, days_with_data=366,
         period_mean=None, period_anomaly=None, abs_max=DatedValue(30.0, days), abs_min=None,
-        warmest_year=None, coldest_year=None, warmest_month=None, coldest_month=None,
+        warmest_years=(), coldest_years=(), warmest_months=(), coldest_months=(),
     )
     assert card_texts(data)[1].note == "01.07.2020, 02.07.2020, 03.07.2020, 04.07.2020, 05.07.2020 и ещё 2 дн."
 
@@ -110,11 +136,12 @@ def test_card_texts_explain_missing_values():
     data = DashboardData(
         date_from=date(2020, 1, 1), date_to=date(2020, 1, 10), days_total=10, days_with_data=0,
         period_mean=None, period_anomaly=None, abs_max=None, abs_min=None,
-        warmest_year=None, coldest_year=None, warmest_month=None, coldest_month=None,
+        warmest_years=(), coldest_years=(), warmest_months=(), coldest_months=(),
     )
     texts = card_texts(data)
     assert all(t.value == "—" for i, t in enumerate(texts) if i != 3)
     assert texts[4].note == "нет полных лет в периоде"
+    assert texts[8].note == texts[9].note == "нет полных месяцев в периоде"
     assert anomaly_note(data).startswith("Норма не рассчитана")
 
 
@@ -188,11 +215,30 @@ def test_dashboard_reports_empty_period(tmp_path, messages):
     assert dialog._stack.currentIndex() == 0
 
 
+def test_empty_period_clears_previous_results(tmp_path, messages):
+    """Пустой период после удачной выборки — старые карточки и графики не
+    остаются на экране под новым фильтром."""
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+    dialog.station_combo.select_wmo(WMO_INDEX)
+    dialog.apply_btn.click()
+    assert dialog._stack.currentWidget() is dialog._content
+    assert dialog._station_label.text()
+
+    dialog.date_from_edit.set_date(date(2010, 1, 1))
+    dialog.date_to_edit.set_date(date(2010, 12, 31))
+    dialog.apply_btn.click()
+
+    assert dialog._stack.currentWidget() is dialog._hint
+    assert dialog._station_label.text() == ""
+    assert "01.01.2010–31.12.2010 данных не найдено" in dialog._hint.text()
+
+
 def test_every_card_has_its_own_help_text():
     data = DashboardData(
         date_from=date(2020, 1, 1), date_to=date(2020, 1, 10), days_total=10, days_with_data=0,
         period_mean=None, period_anomaly=None, abs_max=None, abs_min=None,
-        warmest_year=None, coldest_year=None, warmest_month=None, coldest_month=None,
+        warmest_years=(), coldest_years=(), warmest_months=(), coldest_months=(),
     )
     helps = [t.help for t in card_texts(data)]
     # Подсказка есть и у карточки без значения — описывает расчёт, не результат.

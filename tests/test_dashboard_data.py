@@ -17,6 +17,7 @@ from meteoregik.reports.dashboard_data import (
     build_dashboard,
     compute_dashboard,
     fetch_station_temperatures,
+    is_short_period,
     linear_trend,
     month_is_complete,
     station_day_bounds,
@@ -88,12 +89,13 @@ def test_norm_anomalies_and_records_use_complete_years():
     assert data.annual_norm.value == pytest.approx(6.0)
     assert (data.annual_norm.first_year, data.annual_norm.last_year, data.annual_norm.year_count) == (2018, 2020, 3)
     assert [(y.year, y.anomaly) for y in data.year_anomalies] == [(2018, -2.0), (2019, 0.0), (2020, 2.0)]
-    assert data.warmest_year.year == 2020
-    assert data.coldest_year.year == 2018  # не 2021 с его одним январём
+    assert [y.year for y in data.warmest_years] == [2020]
+    assert [y.year for y in data.coldest_years] == [2018]  # не 2021 с его одним январём
     assert data.trend is None  # 3 года — меньше MIN_TREND_YEARS
     # январь 2021 полный — он и есть самый холодный месяц, с отклонением от нормы января (6.0)
-    assert (data.coldest_month.year, data.coldest_month.month) == (2021, 1)
-    assert data.coldest_month.anomaly == pytest.approx(-20.0 - (4 + 6 + 8 + -20) / 4)
+    assert [(m.year, m.month) for m in data.coldest_months] == [(2021, 1)]
+    assert data.coldest_months[0].anomaly == pytest.approx(-20.0 - (4 + 6 + 8 + -20) / 4)
+    assert data.coldest_months[0].norm == pytest.approx((4 + 6 + 8 + -20) / 4)
 
 
 def test_norm_uses_wmo_base_period_when_enough_complete_years():
@@ -112,7 +114,7 @@ def test_norm_uses_wmo_base_period_when_enough_complete_years():
     anomalies = {y.year: y.anomaly for y in data.year_anomalies}
     assert anomalies[1985] == pytest.approx(-5.0)
     assert anomalies[2021] == pytest.approx(5.0)
-    assert (data.coldest_year.year, data.warmest_year.year) == (1985, 2021)
+    assert ([y.year for y in data.coldest_years], [y.year for y in data.warmest_years]) == ([1985], [2021])
     # весь архив больше не "на уровне нормы" сам с собой
     assert data.period_anomaly == pytest.approx((-5.0 * 365 + 5.0 * 365) / (26 * 365 + 6), abs=0.01)
 
@@ -131,6 +133,96 @@ def test_norm_falls_back_to_archive_with_too_few_base_years():
     assert not data.norm_standard and not data.annual_norm.standard
     assert (data.annual_norm.first_year, data.annual_norm.year_count) == (1985, 24)
     assert data.annual_norm.value == pytest.approx(5.0 * 23 / 24)
+
+
+def test_record_years_list_all_years_with_equal_mean():
+    days = _full_year(2018, 4.0) | _full_year(2019, 6.0) | _full_year(2020, 4.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(2018, 1, 1), date(2020, 12, 31))
+
+    assert [y.year for y in data.coldest_years] == [2018, 2020]
+    assert [y.year for y in data.warmest_years] == [2019]
+
+
+def test_warmest_months_by_value_list_ties():
+    days = _full_year(2019, 5.0) | _full_year(2020, 5.0)
+    for d in range(1, 32):
+        days[date(2019, 7, d)] = DayTemps(20.0, 15.0, 25.0)
+        days[date(2020, 7, d)] = DayTemps(20.0, 15.0, 25.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(2019, 1, 1), date(2020, 12, 31))
+
+    assert [(m.year, m.month) for m in data.warmest_months] == [(2019, 7), (2020, 7)]
+
+
+def test_anomalous_months_compare_with_own_calendar_month_norm():
+    """Аномально тёплый — декабрь +5 к своей норме, а не жаркий июль
+    (он на уровне нормы июля); в периоде без месяцев теплее нормы — пусто."""
+    days = {}
+    for year in (2018, 2019, 2020):
+        days |= _full_year(year, 0.0)
+        for d in range(1, 32):
+            days[date(year, 7, d)] = DayTemps(20.0, 15.0, 25.0)
+    for d in range(1, 32):
+        days[date(2019, 12, d)] = DayTemps(6.0, 1.0, 11.0)  # норма декабря = 2.0 → +4.0
+        days[date(2020, 3, d)] = DayTemps(-6.0, -11.0, -1.0)  # норма марта = -2.0 → -4.0 (декабри 2018, 2020 — лишь -2.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(2018, 1, 1), date(2020, 12, 31))
+
+    assert [(m.year, m.month) for m in data.warmest_months] == [(2018, 7), (2019, 7), (2020, 7)]
+    assert [(m.year, m.month) for m in data.anomalous_warm_months] == [(2019, 12)]
+    assert data.anomalous_warm_months[0].anomaly == pytest.approx(4.0)
+    assert data.anomalous_warm_months[0].norm == pytest.approx(2.0)
+    assert [(m.year, m.month) for m in data.anomalous_cold_months] == [(2020, 3)]
+
+    only_july = compute_dashboard(days, months, years, date(2018, 7, 1), date(2018, 7, 31))
+    assert only_july.anomalous_warm_months == () and only_july.anomalous_cold_months == ()
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "short"),
+    [
+        (date(2019, 1, 1), date(2020, 12, 31), False),  # ровно 24 месяца
+        (date(2019, 1, 1), date(2020, 12, 30), True),
+        (date(2019, 3, 15), date(2021, 3, 14), False),
+        (date(2020, 7, 1), date(2020, 7, 31), True),
+    ],
+)
+def test_is_short_period_is_less_than_24_months(date_from, date_to, short):
+    assert is_short_period(date_from, date_to) is short
+
+
+def test_short_period_has_decade_records_against_decade_norm():
+    """Декадные рекорды — только по полным декадам целиком в периоде;
+    отклонение — от нормы той же декады того же месяца."""
+    days = _full_year(2018, 0.0) | _full_year(2019, 0.0) | _full_year(2020, 0.0)
+    for d in range(11, 21):
+        days[date(2018, 7, d)] = DayTemps(18.0, 13.0, 23.0)
+        days[date(2019, 7, d)] = DayTemps(22.0, 17.0, 27.0)  # норма 2-й декады июля = 20.0
+        days[date(2020, 7, d)] = DayTemps(20.0, 15.0, 25.0)
+    for d in (1, 2, 3):  # 1-я декада января 2019: пропущено 3 дня — неполная
+        del days[date(2019, 1, d)]
+    for d in range(4, 11):
+        days[date(2019, 1, d)] = DayTemps(-30.0, -35.0, -25.0)
+    months, years = _aggregates(days)
+
+    data = compute_dashboard(days, months, years, date(2019, 1, 1), date(2019, 12, 31))
+
+    assert data.short_period
+    warmest = data.warmest_decades
+    assert [(r.start, r.number) for r in warmest] == [(date(2019, 7, 11), 2)]
+    assert warmest[0].value == pytest.approx(22.0)
+    assert warmest[0].norm == pytest.approx(20.0)
+    assert warmest[0].anomaly == pytest.approx(2.0)
+    # неполная холодная декада января не рекорд; остальные декады — по 0.0
+    assert all(r.start != date(2019, 1, 1) for r in data.coldest_decades)
+    assert data.coldest_decades and all(r.value == 0.0 for r in data.coldest_decades)
+
+    two_years = compute_dashboard(days, months, years, date(2018, 1, 1), date(2019, 12, 31))
+    assert not two_years.short_period
 
 
 def test_period_anomaly_is_against_calendar_month_norm():
@@ -180,7 +272,7 @@ def test_incomplete_month_is_shown_but_marked_and_not_a_record():
     february = data.month_cells[(2020, 2)]
     assert not february.complete
     assert (february.days_with_data, february.days_in_month) == (monthrange(2020, 2)[1] - 10, 29)
-    assert data.coldest_month.month != 2
+    assert all(m.month != 2 for m in data.coldest_months)
     assert data.year_anomalies == []  # год с неполным февралём — неполный
 
 
