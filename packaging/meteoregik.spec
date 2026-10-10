@@ -13,6 +13,8 @@ meteoregik/resources.py.
 """
 from pathlib import Path
 
+from PyInstaller.utils.hooks import copy_metadata
+
 ROOT = Path(SPECPATH).parent
 PACKAGE = ROOT / "src" / "meteoregik"
 
@@ -23,6 +25,9 @@ a = Analysis(
     datas=[
         (str(PACKAGE / "static"), "meteoregik/static"),
         (str(PACKAGE / "seed_data"), "meteoregik/seed_data"),
+        # Метаданные пакета: из них приложение берёт номер версии для
+        # заголовка окна (meteoregik/version.py)
+        *copy_metadata("meteoregik"),
     ],
     hiddenimports=[],
     hookspath=[],

@@ -33,6 +33,7 @@ def schedule(app: QApplication, window, out_dir: Path) -> None:
     report: dict[str, object] = {
         "frozen": bool(getattr(sys, "frozen", False)),
         "database": str(window.engine.url.database),
+        "window_title": window.windowTitle(),
         "buttons": sorted(button.text() for button in window.findChildren(QPushButton)),
     }
     state: dict[str, object] = {}

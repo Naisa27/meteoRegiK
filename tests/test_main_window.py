@@ -111,3 +111,16 @@ def test_station_directory_button_opens_station_directory_dialog():
 
     mock_dialog_cls.assert_called_once_with(engine, window)
     mock_dialog_cls.return_value.exec.assert_called_once()
+
+
+def test_window_title_shows_application_version():
+    """Номер версии в заголовке — тот же, что в pyproject.toml и в имени
+    установщика: по нему пользователь называет свою версию."""
+    import tomllib
+    from pathlib import Path
+
+    _qapp()
+    project = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    window = MainWindow(get_engine(":memory:"))
+
+    assert window.windowTitle() == f"meteoRegiK {project['project']['version']}"

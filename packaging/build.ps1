@@ -39,6 +39,7 @@ try {
     $report = Get-Content $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($report.error) { throw "Самопроверка: $($report.error)" }
     if (-not $report.map_page_loaded) { throw 'Самопроверка: страница карты не загрузилась' }
+    if ($report.window_title -ne "meteoRegiK $version") { throw "Самопроверка: в заголовке окна '$($report.window_title)', ожидался номер версии $version" }
     if ($report.directory_stations -lt 1) { throw 'Самопроверка: справочник станций пуст (шаблон базы не попал в сборку?)' }
     Write-Host "    карта открылась, подложка: $($report.map_base), станций в справочнике: $($report.directory_stations)"
 }

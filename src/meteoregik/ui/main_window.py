@@ -11,6 +11,7 @@ from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
 from meteoregik.ui.station_directory import StationDirectoryDialog
+from meteoregik.version import app_version
 
 
 class MainWindow(QMainWindow):
@@ -26,7 +27,8 @@ class MainWindow(QMainWindow):
     def __init__(self, engine: Engine) -> None:
         super().__init__()
         self.engine = engine
-        self.setWindowTitle("meteoRegiK")
+        # Номер версии — чтобы пользователь мог назвать его, сообщая об ошибке
+        self.setWindowTitle(f"meteoRegiK {app_version()}".strip())
         self.resize(1100, 750)
 
         central = QWidget()
