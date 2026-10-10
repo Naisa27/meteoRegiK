@@ -1,0 +1,212 @@
+<!doctype html>
+<!--
+  Страница экрана "Карта" (ui/map_view.py, QWebEngineView). Leaflet и границы
+  стран/регионов лежат рядом, в поставке: страница открывается и без интернета.
+
+  Подложка — гибрид: контурная карта (outline.js) нарисована всегда, поверх
+  неё — тайлы OpenStreetMap, если до них удаётся достучаться. Нет интернета —
+  тайлы не загружаются, остаётся контурная карта; попытка повторяется раз в
+  полминуты. О текущей подложке страница сообщает через document.title
+  ("base:osm" / "base:outline") — Qt слушает titleChanged.
+
+  Что рисовать (маркеры, цвета, подписи, легенду), решает Python
+  (reports/map_render.py) и передаёт сюда через mapApi.*; страница ничего не
+  считает. Ссылки вида app://dashboard/<индекс> перехватывает Qt.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>base:outline</title>
+<link rel="stylesheet" href="leaflet.css">
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  body { font-family: "Segoe UI", sans-serif; }
+  #map { background: #dbe6ee; }
+  /* Тайлы чуть приглушены: цветные маркеры должны читаться поверх карты */
+  .leaflet-tile-pane { filter: saturate(0.55) brightness(1.04); }
+  path.station { filter: drop-shadow(0 0 1.5px rgba(17, 26, 32, 0.6)); cursor: pointer; }
+  .leaflet-tooltip.val {
+    background: rgba(255, 255, 255, 0.92); border: 1px solid #c3d2db; border-radius: 5px;
+    box-shadow: none; color: #26333a; font-size: 12px; font-weight: 600; padding: 1px 5px;
+  }
+  .leaflet-tooltip.val::before { display: none; }
+  .no-labels .leaflet-tooltip.val { display: none; }
+  .leaflet-tooltip.tip { color: #26333a; font-size: 12px; }
+  .pop { color: #26333a; font-size: 12px; min-width: 230px; }
+  .pop b { display: block; font-size: 13px; margin-bottom: 6px; }
+  .pop table { border-collapse: collapse; margin-bottom: 8px; }
+  .pop th { color: #5b6b74; font-weight: 400; padding: 1px 10px 1px 0; text-align: left; vertical-align: top; }
+  .pop td { padding: 1px 0; }
+  .pop a.open {
+    background: #3e6b87; border-radius: 6px; color: #fff; display: inline-block;
+    font-weight: 600; padding: 5px 12px; text-decoration: none;
+  }
+  .pop a.open:hover, .pop a.open:focus { background: #325571; }
+  .legend {
+    background: rgba(255, 255, 255, 0.95); border: 1px solid #d7dee3; border-radius: 8px;
+    color: #26333a; font-size: 12px; max-width: 240px; padding: 8px 10px;
+  }
+  .legend .title { font-weight: 600; margin-bottom: 5px; }
+  .legend .bar { border-radius: 3px; height: 10px; min-width: 190px; }
+  .legend .ticks { color: #5b6b74; display: flex; justify-content: space-between; margin: 2px 0 4px; }
+  .legend .item { align-items: center; display: flex; gap: 6px; margin-top: 3px; }
+  .legend .dot { border: 1px solid rgba(17, 26, 32, 0.35); border-radius: 50%; flex: none; height: 11px; width: 11px; }
+  .legend .note { color: #5b6b74; margin-top: 5px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="leaflet.js"></script>
+<script src="outline.js"></script>
+<script>
+(function () {
+  var DEFAULT_VIEW = [[61, 95], 3];  // Россия целиком
+  var RETRY_MS = 30000;
+  var map = L.map('map', { worldCopyJump: true, zoomSnap: 0.5, minZoom: 2 }).setView(DEFAULT_VIEW[0], DEFAULT_VIEW[1]);
+  map.attributionControl.setPrefix(false);
+
+  // --- подложка ---
+  map.createPane('outline').style.zIndex = 150;      // под тайлами (200)
+  map.createPane('background').style.zIndex = 390;   // серые точки справочника — под маркерами (400)
+  L.geoJSON(window.OUTLINE_COUNTRIES, {
+    pane: 'outline', interactive: false,
+    style: { color: '#8fa1ac', weight: 1, fillColor: '#fbfaf6', fillOpacity: 1 }
+  }).addTo(map);
+  L.geoJSON(window.OUTLINE_REGIONS, {
+    pane: 'outline', interactive: false,
+    style: { color: '#c2ccd3', weight: 0.7, fill: false }
+  }).addTo(map);
+
+  var tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 13,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  });
+  var outlineCredit = 'Границы: Natural Earth';
+  var forcedOutline = false, online = false, errors = 0, retryTimer = null;
+
+  var creditShown = false;
+  function report(mode) { document.title = 'base:' + mode; }
+  // Leaflet считает добавления подписи: без флага повторный addAttribution
+  // потребовал бы столько же removeAttribution
+  function showCredit(show) {
+    if (show === creditShown) { return; }
+    creditShown = show;
+    if (show) { map.attributionControl.addAttribution(outlineCredit); }
+    else { map.attributionControl.removeAttribution(outlineCredit); }
+  }
+  function dropTiles() {
+    online = false;
+    if (map.hasLayer(tiles)) { map.removeLayer(tiles); }
+    showCredit(true);
+    report('outline');
+  }
+  function tryTiles() {
+    retryTimer = null;
+    if (forcedOutline) { return; }
+    errors = 0;
+    if (!map.hasLayer(tiles)) { tiles.addTo(map); }
+  }
+  function scheduleRetry() {
+    if (retryTimer === null && !forcedOutline) { retryTimer = setTimeout(tryTiles, RETRY_MS); }
+  }
+  tiles.on('tileload', function () {
+    errors = 0;
+    if (!online) {
+      online = true;
+      showCredit(false);
+      report('osm');
+    }
+  });
+  tiles.on('tileerror', function () {
+    errors += 1;
+    // Одна-две ошибки — случайный сбой; подряд несколько — сети нет
+    if (errors >= (online ? 6 : 3)) { dropTiles(); scheduleRetry(); }
+  });
+  window.addEventListener('online', function () { if (!online) { tryTiles(); } });
+  showCredit(true);
+  tryTiles();
+
+  // --- слои данных ---
+  var backgroundLayer = L.layerGroup().addTo(map);
+  var markerLayer = L.layerGroup().addTo(map);
+  var backgroundRenderer = L.canvas({ pane: 'background', padding: 0.3 });
+  var hoverTip = null;
+
+  var legend = L.control({ position: 'bottomright' });
+  legend.onAdd = function () {
+    var box = L.DomUtil.create('div', 'legend');
+    L.DomEvent.disableClickPropagation(box);
+    return box;
+  };
+  legend.addTo(map);
+
+  function closeHover() {
+    if (hoverTip) { map.closeTooltip(hoverTip); hoverTip = null; }
+  }
+
+  window.mapApi = {
+    // points: [[широта, долгота, подпись], ...] — все станции справочника
+    setBackground: function (points) {
+      backgroundLayer.clearLayers();
+      points.forEach(function (p) {
+        L.circleMarker([p[0], p[1]], {
+          renderer: backgroundRenderer, radius: 2.5, stroke: false, fillColor: '#6f7f89', fillOpacity: 0.55
+        }).bindTooltip(p[2], { className: 'tip', direction: 'top' }).addTo(backgroundLayer);
+      });
+    },
+    showBackground: function (visible) {
+      if (visible) { backgroundLayer.addTo(map); } else { map.removeLayer(backgroundLayer); }
+    },
+    // markers: [{lat, lon, color, radius, label, tip, popup, muted}, ...]
+    setMarkers: function (markers, fit) {
+      closeHover();
+      var open = null;
+      markerLayer.eachLayer(function (layer) { if (layer.isPopupOpen && layer.isPopupOpen()) { open = layer.wmo; } });
+      markerLayer.clearLayers();
+      var bounds = [];
+      markers.forEach(function (m) {
+        var marker = L.circleMarker([m.lat, m.lon], {
+          radius: m.radius, className: 'station', fillColor: m.color, fillOpacity: 1,
+          color: '#ffffff', weight: 2, dashArray: m.muted ? '3 3' : null
+        });
+        marker.wmo = m.wmo;
+        marker.bindPopup(m.popup, { maxWidth: 340 });
+        if (m.label) {
+          marker.bindTooltip(m.label, {
+            permanent: true, className: 'val', direction: 'right', offset: [m.radius + 2, 0], interactive: false
+          });
+        }
+        marker.on('mouseover', function () {
+          closeHover();
+          hoverTip = L.tooltip({ className: 'tip', direction: 'top', offset: [0, -m.radius] })
+            .setLatLng([m.lat, m.lon]).setContent(m.tip);
+          map.openTooltip(hoverTip);
+        });
+        marker.on('mouseout click', closeHover);
+        marker.addTo(markerLayer);
+        // Шаг ползунка времени не должен закрывать открытую карточку станции
+        if (open !== null && open === m.wmo) { marker.openPopup(); }
+        bounds.push([m.lat, m.lon]);
+      });
+      if (fit) {
+        if (bounds.length) { map.fitBounds(bounds, { padding: [60, 60], maxZoom: 7 }); }
+        else { map.setView(DEFAULT_VIEW[0], DEFAULT_VIEW[1]); }
+      }
+    },
+    setLegend: function (html) { legend.getContainer().innerHTML = html; },
+    setLabelsVisible: function (visible) {
+      L.DomUtil[visible ? 'removeClass' : 'addClass'](map.getContainer(), 'no-labels');
+    },
+    // true — только контурная карта, даже когда интернет есть
+    setOutlineOnly: function (only) {
+      forcedOutline = only;
+      if (only) {
+        if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+        dropTiles();
+      } else { tryTiles(); }
+    }
+  };
+})();
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ from matplotlib.colors import CenteredNorm, LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch, Rectangle
 from numpy import ma
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QToolTip, QVBoxLayout, QWidget
 
@@ -90,11 +91,23 @@ class _ChartCanvas(QWidget):
         super().__init__(parent)
         self.figure = Figure(facecolor=theme.BG)
         self.canvas = FigureCanvasQTAgg(self.figure)
+        # Ниже график нечитаем; если в окно он с остальным не помещается —
+        # вкладка прокручивается (dashboard_widgets.scrollable)
         self.canvas.setMinimumHeight(260)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+        # Колесо мыши над графиком должно прокручивать вкладку: холст
+        # matplotlib сам забирает событие колеса, и прокрутка "застревала"
+        # бы, как только курсор оказывался над графиком.
+        self.canvas.installEventFilter(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.canvas)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 — имя метода Qt
+        if watched is self.canvas and event.type() == QEvent.Type.Wheel:
+            event.ignore()  # не обработано — Qt передаст событие области прокрутки
+            return True
+        return super().eventFilter(watched, event)
 
     def tooltip_at(self, event: MouseEvent) -> str | None:
         raise NotImplementedError

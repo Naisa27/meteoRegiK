@@ -45,40 +45,36 @@ from statistics import fmean
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
+from meteoregik.calculations.anomalies import (  # noqa: F401 — часть имён реэкспортируется
+    MAX_MISSING_DAYS,
+    MAX_MISSING_DECADE_DAYS,
+    MAX_MISSING_RUN,
+    MIN_NORM_BASE_YEARS,
+    NORM_BASE_FIRST_YEAR,
+    NORM_BASE_LAST_YEAR,
+    PARAMETER,
+    DayTemps,
+    NormInfo,
+    StationNorms,
+    compute_station_norms,
+    days_with_avg_by_month,
+    decade_averages,
+    decade_is_complete,
+    ensure_fresh,
+    fetch_station_temperatures,
+    load_station_norms,
+    month_is_complete,
+)
 from meteoregik.calculations.temperature import decade_bounds
 from meteoregik.db.schema import computed_indicators
-
-PARAMETER = "T"
-
-# Правило ВМО "3/5" для месячной средней (WMO-No. 1203): не больше 5
-# пропущенных дней всего и не больше 3 подряд.
-MAX_MISSING_DAYS = 5
-MAX_MISSING_RUN = 3
-
-# Базовый период нормы ВМО и минимум полных лет в нём (80 % из 30), чтобы
-# норму можно было считать по нему, а не по всему архиву.
-NORM_BASE_FIRST_YEAR = 1991
-NORM_BASE_LAST_YEAR = 2020
-MIN_NORM_BASE_YEARS = 24
 
 # Период короче стольких месяцев — вместо самого тёплого/холодного года
 # показываются декады: полных лет в нём не больше одного, и "рекорд" из
 # одного года ничего не говорит.
 MIN_YEAR_RECORD_MONTHS = 24
-# Декада (10–11 дней) считается полной, если пропущено не больше 2 дней —
-# примерно та же доля, что 5 дней из 30 в правиле "3/5" для месяца.
-MAX_MISSING_DECADE_DAYS = 2
-
 # Меньше точек — линия тренда по ним ничего не говорит (одна-две аномалии
 # дают "тренд" любого знака), поэтому тренд не строится.
 MIN_TREND_YEARS = 5
-
-
-@dataclass(frozen=True)
-class DayTemps:
-    avg: float | None = None
-    min: float | None = None
-    max: float | None = None
 
 
 @dataclass(frozen=True)
@@ -174,17 +170,6 @@ class Trend:
 
 
 @dataclass(frozen=True)
-class NormInfo:
-    """Годовая норма и по каким годам она посчитана (для подписи на экране)."""
-
-    value: float
-    first_year: int
-    last_year: int
-    year_count: int
-    standard: bool  # True — база ВМО 1991–2020, False — откат на весь архив
-
-
-@dataclass(frozen=True)
 class DashboardData:
     date_from: date
     date_to: date
@@ -228,43 +213,6 @@ class DashboardData:
 # --- выборка ---
 
 
-def fetch_station_temperatures(
-    engine: Engine, wmo_index: int
-) -> tuple[dict[date, DayTemps], dict[tuple[int, int], float], dict[int, float]]:
-    """Вся история станции: суточные avg/min/max, месячные и годовые
-    средние. Вся — потому что норма считается по всей истории (см.
-    докстринг модуля); для одной станции это десятки тысяч строк, не
-    проблема для одного запроса."""
-    stmt = select(
-        computed_indicators.c.period_type,
-        computed_indicators.c.period_start,
-        computed_indicators.c.stat_type,
-        computed_indicators.c.value,
-    ).where(
-        computed_indicators.c.wmo_index == wmo_index,
-        computed_indicators.c.parameter == PARAMETER,
-        computed_indicators.c.period_type.in_(("day", "month", "year")),
-    )
-    with engine.connect() as conn:
-        rows = conn.execute(stmt).all()
-
-    day_parts: dict[date, dict[str, float | None]] = {}
-    months: dict[tuple[int, int], float] = {}
-    years: dict[int, float] = {}
-    for period_type, start, stat_type, value in rows:
-        if period_type == "day":
-            day_parts.setdefault(start, {})[stat_type] = value
-        elif value is None or stat_type != "avg":
-            continue
-        elif period_type == "month":
-            months[(start.year, start.month)] = value
-        else:
-            years[start.year] = value
-
-    days = {day: DayTemps(parts.get("avg"), parts.get("min"), parts.get("max")) for day, parts in day_parts.items()}
-    return days, months, years
-
-
 def station_day_bounds(engine: Engine, wmo_index: int) -> tuple[date, date] | None:
     """Первый и последний день с суточными значениями — "весь архив" для
     пустого периода. Не aggregate_query.station_period_bounds: та берёт
@@ -286,26 +234,14 @@ def station_day_bounds(engine: Engine, wmo_index: int) -> tuple[date, date] | No
 
 
 def build_dashboard(engine: Engine, wmo_index: int, date_from: date, date_to: date) -> DashboardData:
+    """Нормы и полнота берутся сохранённые (calculations/anomalies.py); если
+    данные станции менялись после последнего расчёта — сначала досчитываются."""
+    ensure_fresh(engine, [wmo_index])
     days, months, years = fetch_station_temperatures(engine, wmo_index)
-    return compute_dashboard(days, months, years, date_from, date_to)
+    return compute_dashboard(days, months, years, date_from, date_to, load_station_norms(engine, wmo_index))
 
 
 # --- расчёт ---
-
-
-def month_is_complete(days_with_data: set[int], days_in_month: int) -> bool:
-    """Правило "3/5" по номерам дней месяца, за которые есть суточная средняя."""
-    missing = 0
-    run = 0
-    for day in range(1, days_in_month + 1):
-        if day in days_with_data:
-            run = 0
-            continue
-        missing += 1
-        run += 1
-        if missing > MAX_MISSING_DAYS or run > MAX_MISSING_RUN:
-            return False
-    return True
 
 
 def linear_trend(points: list[tuple[int, float]]) -> Trend | None:
@@ -324,14 +260,6 @@ def linear_trend(points: list[tuple[int, float]]) -> Trend | None:
 
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
-
-
-def _days_with_avg_by_month(days: dict[date, DayTemps]) -> dict[tuple[int, int], set[int]]:
-    result: dict[tuple[int, int], set[int]] = {}
-    for day, temps in days.items():
-        if temps.avg is not None:
-            result.setdefault((day.year, day.month), set()).add(day.day)
-    return result
 
 
 def _extreme(days: list[tuple[date, float]], *, highest: bool) -> DatedValue | None:
@@ -370,65 +298,22 @@ def is_short_period(date_from: date, date_to: date) -> bool:
     return date_to < _add_months(date_from, MIN_YEAR_RECORD_MONTHS) - timedelta(days=1)
 
 
-def _decade_averages(days: dict[date, DayTemps]) -> dict[date, tuple[float, int, int]]:
-    """Средняя каждой декады по суточным средним (как decade в
-    calculations/temperature.py, с тем же округлением), число дней с данными
-    и длина декады."""
-    by_decade: dict[date, list[float]] = {}
-    for day, temps in days.items():
-        if temps.avg is not None:
-            by_decade.setdefault(decade_bounds(day)[0], []).append(temps.avg)
-    return {
-        start: (round(fmean(values), 2), len(values), (decade_bounds(start)[1] - start).days + 1)
-        for start, values in by_decade.items()
-    }
-
-
-def _decade_complete(days_with_data: int, length: int) -> bool:
-    return length - days_with_data <= MAX_MISSING_DECADE_DAYS
-
-
-def _norm_base(
-    complete_months: set[tuple[int, int]], complete_years: set[int]
-) -> tuple[bool, set[tuple[int, int]], list[int]]:
-    """По каким полным месяцам и годам считать норму: база ВМО 1991–2020,
-    если в ней не меньше MIN_NORM_BASE_YEARS полных лет, иначе весь архив.
-    Решение одно на станцию — месячные и годовая нормы из одной базы, иначе
-    отклонения на соседних карточках отсчитывались бы от разного."""
-    base_years = sorted(y for y in complete_years if NORM_BASE_FIRST_YEAR <= y <= NORM_BASE_LAST_YEAR)
-    if len(base_years) >= MIN_NORM_BASE_YEARS:
-        base_months = {key for key in complete_months if NORM_BASE_FIRST_YEAR <= key[0] <= NORM_BASE_LAST_YEAR}
-        return True, base_months, base_years
-    return False, complete_months, sorted(complete_years)
-
-
 def compute_dashboard(
     days: dict[date, DayTemps],
     months: dict[tuple[int, int], float],
     years: dict[int, float],
     date_from: date,
     date_to: date,
+    norms: StationNorms | None = None,
 ) -> DashboardData:
-    present = _days_with_avg_by_month(days)
-    complete_months = {
-        key for key in months if month_is_complete(present.get(key, set()), monthrange(*key)[1])
-    }
-    complete_years = {
-        year for year in years if all((year, month) in complete_months for month in range(1, 13))
-    }
-
-    norm_standard, norm_months, norm_years = _norm_base(complete_months, complete_years)
-    month_norms: dict[int, float] = {}
-    for month in range(1, 13):
-        values = [months[key] for key in norm_months if key[1] == month]
-        if values:
-            month_norms[month] = fmean(values)
-
-    annual_norm = (
-        NormInfo(fmean(years[y] for y in norm_years), norm_years[0], norm_years[-1], len(norm_years), norm_standard)
-        if norm_years
-        else None
-    )
+    """norms — сохранённые нормы и полнота станции; без них считаются здесь
+    же тем же правилом (compute_station_norms) — так работают тесты и расчёт
+    по данным, которых нет в базе."""
+    if norms is None:
+        norms = compute_station_norms(days, months, years)
+    present = days_with_avg_by_month(days)
+    complete_months, complete_years = norms.complete_months, norms.complete_years
+    norm_standard, month_norms, annual_norm = norms.standard, norms.months, norms.annual
 
     # --- карточки по дням периода ---
     period_days = [(d, t) for d, t in days.items() if date_from <= d <= date_to]
@@ -466,12 +351,8 @@ def compute_dashboard(
                 )
 
     # --- декады: рекорды для короткого периода (полные декады целиком внутри) ---
-    decade_avgs = _decade_averages(days)
-    decade_norm_values: dict[tuple[int, int], list[float]] = {}
-    for start, (value, count, length) in decade_avgs.items():
-        if _decade_complete(count, length) and (start.year, start.month) in norm_months:
-            decade_norm_values.setdefault((start.month, start.day), []).append(value)
-    decade_norms = {key: fmean(values) for key, values in decade_norm_values.items()}
+    decade_avgs = decade_averages(days)
+    decade_norms = norms.decades
     inside_decades: list[DecadeRecord] = []
     decade_cells: dict[date, DecadeCell] = {}
     for start in sorted(decade_avgs):
@@ -479,7 +360,7 @@ def compute_dashboard(
         end = decade_bounds(start)[1]
         if end < date_from or start > date_to:
             continue
-        complete = _decade_complete(count, length)
+        complete = decade_is_complete(count, length)
         norm = decade_norms.get((start.month, start.day))
         # теплокарта — по пересечению с периодом (как месяцы), рекорды — целиком внутри
         decade_cells[start] = DecadeCell(start, value, count, length, complete, norm)

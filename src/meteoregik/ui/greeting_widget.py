@@ -17,9 +17,10 @@ import_requested / data_browser_requested / aggregate_view_requested,
 MainWindow сам решает, что делать. Кнопки — четырьмя рядами по разделам
 (правка 2026-09-30; "Аналитика" — 2026-10-05), у каждого ряда подпись и своя
 гамма из theme.py: "Работа с данными" (оттенки синего — импорт, просмотр
-исходных и агрегатных данных), "Расчёт показателей" (зелёные, кнопок пока
-нет), "Справочники" (тёмное золото, station_directory_requested) и
-"Аналитика" (фиолетовый, дашборд — dashboard_requested)."""
+исходных и агрегатных данных), "Расчёт показателей" (зелёные — отклонения
+от нормы, anomaly_calc_requested), "Справочники" (тёмное золото, station_directory_requested) и
+"Аналитика" (фиолетовый, дашборд — dashboard_requested, карта —
+map_requested)."""
 
 from __future__ import annotations
 
@@ -64,7 +65,9 @@ class GreetingWidget(QWidget):
     import_requested = Signal()
     data_browser_requested = Signal()
     aggregate_view_requested = Signal()
+    anomaly_calc_requested = Signal()
     dashboard_requested = Signal()
+    map_requested = Signal()
     station_directory_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -164,13 +167,13 @@ class GreetingWidget(QWidget):
         layout.addLayout(data_row)
         layout.addSpacing(18)
 
-        # Расчётных экранов пока нет (в ТЗ не описаны) — ряд обозначен, чтобы
-        # раскладка главного окна не менялась, когда они появятся.
-        calc_row = self._button_row(layout, "Расчёт показателей", theme.CALC_ROW_TITLE, [], theme.CALC_ROW_COLORS)
-        placeholder = QLabel("Раздел в разработке")
-        placeholder.setFont(QFont("Segoe UI", 10))
-        placeholder.setStyleSheet(f"color: {_TEXT_SECONDARY}; background: transparent; font-style: italic;")
-        calc_row.addWidget(placeholder)
+        # Первый расчётный экран — нормы и отклонения от них (2026-10-10);
+        # следующие показатели добавляются кнопками в этот же ряд.
+        calc_row = self._button_row(
+            layout, "Расчёт показателей", theme.CALC_ROW_TITLE,
+            [("Отклонения от нормы", self.anomaly_calc_requested)],
+            theme.CALC_ROW_COLORS,
+        )
         layout.addLayout(calc_row)
         layout.addSpacing(18)
 
@@ -186,7 +189,10 @@ class GreetingWidget(QWidget):
         # обзор уже посчитанных данных, а не работа с сырыми данными.
         analytics_row = self._button_row(
             layout, "Аналитика", theme.ANALYTICS_ROW_TITLE,
-            [("Дашборд", self.dashboard_requested, tinted_icon(DASHBOARD_ICON_PATH, "#FFFFFF"))],
+            [
+                ("Дашборд", self.dashboard_requested, tinted_icon(DASHBOARD_ICON_PATH, "#FFFFFF")),
+                ("Карта", self.map_requested),
+            ],
             theme.ANALYTICS_ROW_COLORS,
         )
         layout.addLayout(analytics_row)

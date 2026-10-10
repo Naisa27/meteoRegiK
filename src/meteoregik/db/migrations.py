@@ -37,6 +37,13 @@ calculations/recompute.py для диалога разрешения конфл�
 источниками с разными значениями на одну и ту же дату (rp5 vs ГГ), см.
 правки пользователя от 2026-09-19. computed_indicators на момент миграции
 пуста — пересоздаётся тем же паттерном.
+
+Миграция 6 — три новые таблицы сохранённого расчёта отклонений от нормы
+(station_norms, period_completeness, anomaly_state; calculations/anomalies.py).
+Существующие таблицы не меняются — в отличие от прежних миграций, рабочая
+база к этому моменту уже с данными, пересоздавать нечего и нельзя. Строк
+состояния ни у одной станции нет, поэтому все станции считаются требующими
+расчёта и досчитываются при первом открытии дашборда или карты.
 """
 
 from __future__ import annotations
@@ -44,9 +51,18 @@ from __future__ import annotations
 from sqlalchemy import inspect, select
 from sqlalchemy.engine import Connection, Engine
 
-from meteoregik.db.schema import computed_indicators, gg_readings, metadata, rp5_readings, schema_version
+from meteoregik.db.schema import (
+    anomaly_state,
+    computed_indicators,
+    gg_readings,
+    metadata,
+    period_completeness,
+    rp5_readings,
+    schema_version,
+    station_norms,
+)
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def run_migrations(engine: Engine) -> None:
@@ -70,6 +86,8 @@ def run_migrations(engine: Engine) -> None:
                 _migrate_to_4(conn)
             if version < 5:
                 _migrate_to_5(conn)
+            if version < 6:
+                _migrate_to_6(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -99,3 +117,7 @@ def _migrate_to_4(conn: Connection) -> None:
 
 def _migrate_to_5(conn: Connection) -> None:
     _recreate_if_empty(conn, computed_indicators, "Миграция 5")
+
+
+def _migrate_to_6(conn: Connection) -> None:
+    metadata.create_all(conn, tables=[station_norms, period_completeness, anomaly_state], checkfirst=True)

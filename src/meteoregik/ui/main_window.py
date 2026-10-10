@@ -6,6 +6,7 @@ from sqlalchemy.engine import Engine
 
 from meteoregik.ui.dashboard_view import DashboardDialog
 from meteoregik.ui.data_browser import DataBrowserDialog
+from meteoregik.ui.anomaly_calc_dialog import AnomalyCalcDialog
 from meteoregik.ui.greeting_widget import GreetingWidget
 from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
@@ -37,7 +38,9 @@ class MainWindow(QMainWindow):
         greeting.import_requested.connect(self._open_import_dialog)
         greeting.data_browser_requested.connect(self._open_data_browser)
         greeting.aggregate_view_requested.connect(self._open_aggregate_view)
+        greeting.anomaly_calc_requested.connect(self._open_anomaly_calc)
         greeting.dashboard_requested.connect(self._open_dashboard)
+        greeting.map_requested.connect(self._open_map)
         greeting.station_directory_requested.connect(self._open_station_directory)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
@@ -87,6 +90,18 @@ class MainWindow(QMainWindow):
 
     def _open_dashboard(self) -> None:
         dialog = DashboardDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_anomaly_calc(self) -> None:
+        dialog = AnomalyCalcDialog(self.engine, self)
+        dialog.exec()
+
+    def _open_map(self) -> None:
+        # Импорт здесь, а не в начале модуля: карта тянет за собой браузерный
+        # движок Qt (QtWebEngine), и запуск приложения не должен его ждать
+        from meteoregik.ui.map_view import MapDialog
+
+        dialog = MapDialog(self.engine, self)
         dialog.exec()
 
     def _open_station_directory(self) -> None:

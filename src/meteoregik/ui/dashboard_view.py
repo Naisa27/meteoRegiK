@@ -1,4 +1,7 @@
-"""Экран "Дашборд", этап 1 (решение пользователя 2026-10-01, plan.md, "Экраны
+"""Экран "Дашборд": две вкладки (корректировка 2026-10-10). "Исходные
+данные" — что залито и где пропуски, по всей базе
+(ui/dashboard_source_tab.py). Остальное в этом модуле — вкладка
+"Температурный режим", этап 1 (решение пользователя 2026-10-01, plan.md, "Экраны
 UI", п.4): одна станция + период -> сверху карточки-сводки, ниже теплокарта
 "год × месяц" и аномалии среднегодовой температуры с трендом. Только по уже
 посчитанной температуре; агрометеорологические показатели появятся позже
@@ -25,8 +28,8 @@ from dataclasses import dataclass, replace
 from datetime import date
 from typing import Callable, Iterable
 
-from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QColor, QFocusEvent, QIcon, QLinearGradient, QPainter
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
@@ -39,8 +42,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QStackedWidget,
-    QToolButton,
-    QToolTip,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -75,12 +77,23 @@ from meteoregik.ui.dashboard_charts import (
     AnomalyChart,
     TemperatureHeatmap,
 )
+from meteoregik.ui.dashboard_source_tab import SourceDataTab
+from meteoregik.ui.dashboard_widgets import (
+    CardText,
+    GrooveDivider as _GrooveDivider,
+    StatCard as _StatCard,
+    format_count as _format_count,
+    format_day as _format_day,
+    scrollable,
+)
 from meteoregik.ui.date_field import DateField, DateFieldError
 from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
 _TITLE = "Дашборд"
+TAB_TEMPERATURE = "Температурный режим"
+TAB_SOURCE = "Исходные данные"
 # Тёмно-синий текст переключателя теплокарты: 11.6:1 на белом
 HEATMAP_MODE_TEXT = "#1E3A6E"
 _START_HINT = (
@@ -123,6 +136,8 @@ QToolButton#helpBadge:focus {{
     border: {theme.FOCUS_RING_WIDTH}px solid {theme.FOCUS_RING};
     color: {theme.TEXT_PRIMARY};
 }}
+QScrollArea {{ background: transparent; border: none; }}
+QWidget#scrollViewport, QWidget#scrollContent {{ background: transparent; }}
 QToolTip {{
     color: {theme.TEXT_PRIMARY};
     background: {theme.INPUT_BG};
@@ -279,10 +294,6 @@ HELP_WARMEST_MONTH = _MONTH_RECORD.format(which="наибольшей")
 HELP_COLDEST_MONTH = _MONTH_RECORD.format(which="наименьшей")
 
 
-def _format_day(day: date) -> str:
-    return f"{day:%d.%m.%Y}"
-
-
 def _join_limited(items: list[str], sep: str, rest_unit: str, limit: int = MAX_LISTED) -> str:
     """Список рекордов через sep. Больше MAX_LISTED — первые и "и ещё N
     <rest_unit>": иначе на длинном архиве карточка могла бы вытянуться на
@@ -320,19 +331,6 @@ def _format_months(records: tuple[MonthRecord, ...]) -> str:
 def _unique(texts: Iterable[str]) -> list[str]:
     """Без повторов, с сохранением порядка."""
     return list(dict.fromkeys(texts))
-
-
-def _format_count(value: int) -> str:
-    """Тысячи через неразрывный пробел — "3 652", как принято в русском тексте."""
-    return f"{value:,}".replace(",", " ")
-
-
-@dataclass(frozen=True)
-class CardText:
-    caption: str
-    value: str
-    note: str
-    help: str = ""
 
 
 def _norm_name(data: DashboardData, month: int | None = None) -> str:
@@ -497,112 +495,6 @@ def anomaly_note(data: DashboardData) -> str:
     return text
 
 
-def tooltip_html(text: str) -> str:
-    """Подсказка как rich text фиксированной ширины — такую Qt переносит по
-    словам, а не тянет одной строкой во весь экран; абзацы — по пустой строке."""
-    paragraphs = "".join(f"<p style='margin: 0 0 6px 0'>{p}</p>" for p in text.split("\n\n"))
-    return f"<div style='width: 340px'>{paragraphs}</div>"
-
-
-class _HelpBadge(QToolButton):
-    """Значок "?" с подсказкой. Кроме наведения мыши подсказка показывается
-    по фокусу с клавиатуры (Tab) и по щелчку/пробелу — подсказка только по
-    наведению недоступна без мыши."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("helpBadge")
-        self.setText("?")
-        self.setCursor(Qt.CursorShape.WhatsThisCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.clicked.connect(self.show_tip)
-
-    def set_help(self, caption: str, text: str) -> None:
-        self.setToolTip(tooltip_html(text) if text else "")
-        self.setAccessibleName(f"Как считается: {caption}")
-        self.setAccessibleDescription(text)
-
-    def show_tip(self) -> None:
-        if self.toolTip():
-            QToolTip.showText(self.mapToGlobal(QPoint(0, self.height() + 4)), self.toolTip(), self)
-
-    def focusInEvent(self, event: QFocusEvent) -> None:
-        super().focusInEvent(event)
-        if event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason):
-            self.show_tip()
-
-    def focusOutEvent(self, event: QFocusEvent) -> None:
-        super().focusOutEvent(event)
-        QToolTip.hideText()
-
-
-class _GrooveDivider(QWidget):
-    """Вертикальная "вдавленная" черта между теплокартой и графиком: тёмная
-    линия-тень и светлая линия-блик рядом (классический engraved-эффект),
-    к концам плавно растворяется в фоне — не режет экран жёсткой чертой."""
-
-    _SHADOW = QColor(theme.HEADER_BORDER).darker(135)
-    _LIGHT = QColor("#FFFFFF")
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedWidth(12)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-    def paintEvent(self, event) -> None:  # noqa: N802 — имя метода Qt
-        painter = QPainter(self)
-        x = self.width() // 2 - 1
-        for offset, color in ((0, self._SHADOW), (1, self._LIGHT)):
-            gradient = QLinearGradient(0, 0, 0, self.height())
-            transparent = QColor(color)
-            transparent.setAlpha(0)
-            gradient.setColorAt(0.0, transparent)
-            gradient.setColorAt(0.12, color)
-            gradient.setColorAt(0.88, color)
-            gradient.setColorAt(1.0, transparent)
-            painter.fillRect(x + offset, 0, 1, self.height(), gradient)
-        painter.end()
-
-
-class _StatCard(QFrame):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("statCard")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 10, 10)
-        layout.setSpacing(2)
-        self.caption = QLabel()
-        self.caption.setObjectName("statCaption")
-        # Длинная подпись ("Средняя суточная температура за период") в узком
-        # окне переносится, а не обрезается.
-        self.caption.setWordWrap(True)
-        self.help_badge = _HelpBadge()
-        self.value = QLabel()
-        self.value.setObjectName("statValue")
-        # Несколько месяцев-рекордсменов крупным шрифтом в одну строку
-        # расталкивали бы колонки сетки — переносим, как подпись и примечание.
-        self.value.setWordWrap(True)
-        self.note = QLabel()
-        self.note.setObjectName("statNote")
-        self.note.setWordWrap(True)
-        for label in (self.caption, self.value, self.note):
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        caption_row = QHBoxLayout()
-        caption_row.setSpacing(6)
-        caption_row.addWidget(self.caption, stretch=1)
-        caption_row.addWidget(self.help_badge, alignment=Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(caption_row)
-        layout.addWidget(self.value)
-        layout.addWidget(self.note)
-        layout.addStretch(1)
-
-    def set_text(self, text: CardText) -> None:
-        self.caption.setText(text.caption)
-        self.value.setText(text.value)
-        self.note.setText(text.note)
-        self.help_badge.set_help(text.caption, text.help)
-
-
 @dataclass(frozen=True)
 class _AppliedFilter:
     wmo_index: int
@@ -612,7 +504,11 @@ class _AppliedFilter:
 
 
 class DashboardDialog(QDialog):
-    def __init__(self, engine: Engine, parent=None, run_async: bool = True) -> None:
+    def __init__(
+        self, engine: Engine, parent=None, run_async: bool = True, wmo_index: int | None = None
+    ) -> None:
+        """wmo_index — станция, которую сразу выбрать и показать за весь её
+        архив (переход из карточки станции на экране "Карта")."""
         super().__init__(parent)
         enable_min_max_buttons(self)
         self.engine = engine
@@ -628,13 +524,46 @@ class DashboardDialog(QDialog):
         self.setStyleSheet(theme.DIALOG_QSS + DASHBOARD_QSS)
         self._build_ui()
         self.station_combo.set_choices(load_stations_with_computed_indicators(self.engine))
+        if wmo_index is not None:
+            self.station_combo.select_wmo(wmo_index)
+            self._apply_filters()
 
     # --- построение интерфейса ---
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 14, 20, 16)
+        layout.setSpacing(10)
+
+        # Две вкладки (корректировка 2026-10-10): всё прежнее содержимое —
+        # "Температурный режим" (станция + период), новая "Исходные данные" —
+        # по всей базе, поэтому фильтр живёт внутри первой вкладки, а не над обеими.
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(self._build_temperature_tab(), TAB_TEMPERATURE)
+        self.source_tab = SourceDataTab(self.engine, run_async=self._run_async)
+        self.tabs.addTab(self.source_tab, TAB_SOURCE)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs, stretch=1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close_btn = QPushButton("Закрыть")
+        close_btn.setObjectName("secondary")
+        close_btn.clicked.connect(self.accept)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+        reserve_focus_width(self.apply_btn, close_btn)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.source_tab:
+            self.source_tab.ensure_loaded()
+
+    def _build_temperature_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
         layout.addWidget(self._build_filter_card())
 
         self._station_label = QLabel("")
@@ -654,19 +583,11 @@ class DashboardDialog(QDialog):
         results_area = QWidget()
         results_layout = QGridLayout(results_area)
         results_layout.setContentsMargins(0, 0, 0, 0)
-        results_layout.addWidget(self._stack, 0, 0)
+        results_layout.addWidget(scrollable(self._stack), 0, 0)
         self.loading_overlay = LoadingOverlay("Считаем показатели…")
         results_layout.addWidget(self.loading_overlay, 0, 0)
         layout.addWidget(results_area, stretch=1)
-
-        close_row = QHBoxLayout()
-        close_row.addStretch(1)
-        close_btn = QPushButton("Закрыть")
-        close_btn.setObjectName("secondary")
-        close_btn.clicked.connect(self.accept)
-        close_row.addWidget(close_btn)
-        layout.addLayout(close_row)
-        reserve_focus_width(*self.findChildren(QPushButton))
+        return tab
 
     def _build_filter_card(self) -> QFrame:
         card = QFrame()

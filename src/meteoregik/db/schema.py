@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -155,4 +156,58 @@ computed_indicators = Table(
         "wmo_index", "period_type", "period_start", "period_end", "parameter", "stat_type",
         name="uq_computed_indicators_key",
     ),
+)
+
+# --- сохранённый расчёт отклонений от нормы (миграция 6, calculations/anomalies.py) ---
+
+# Нормы станции. period_type: 'month' (month = 1–12), 'decade' (month и
+# decade = 1–3) или 'year' (month = decade = 0). Нули вместо NULL — чтобы
+# уникальность работала (в SQLite NULL в UNIQUE не равен NULL).
+station_norms = Table(
+    "station_norms",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("wmo_index", Integer, nullable=False),
+    Column("parameter", Text, nullable=False),
+    Column("period_type", Text, nullable=False),
+    Column("month", Integer, nullable=False),
+    Column("decade", Integer, nullable=False),
+    Column("value", Float, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    UniqueConstraint("wmo_index", "parameter", "period_type", "month", "decade", name="uq_station_norms_key"),
+)
+
+# Полнота месяца и года: без неё средняя неполного периода выдавалась бы за
+# настоящую (правило ВМО "3/5" по месяцу нельзя восстановить по числу дней —
+# важны и пропуски подряд, поэтому признак хранится, а не выводится).
+period_completeness = Table(
+    "period_completeness",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("wmo_index", Integer, nullable=False),
+    Column("parameter", Text, nullable=False),
+    Column("period_type", Text, nullable=False),  # 'month' | 'year'
+    Column("period_start", Date, nullable=False),
+    Column("days_with_data", Integer, nullable=False),
+    Column("complete", Boolean, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    UniqueConstraint("wmo_index", "parameter", "period_type", "period_start", name="uq_period_completeness_key"),
+)
+
+# Состояние расчёта станции. Строки нет (или rule_version старая) — нормы и
+# отклонения станции устарели и требуют расчёта: calculations/recompute.py
+# удаляет строку при любом изменении суточных значений станции.
+anomaly_state = Table(
+    "anomaly_state",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("calculated_at", DateTime, nullable=False),
+    Column("rule_version", Integer, nullable=False),
+    # База нормы: True — ВМО 1991–2020, False — весь архив; NULL и пустые
+    # годы — полных лет нет, годовой нормы нет
+    Column("norm_standard", Boolean, nullable=False),
+    Column("norm_first_year", Integer, nullable=True),
+    Column("norm_last_year", Integer, nullable=True),
+    Column("norm_years", Integer, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
 )

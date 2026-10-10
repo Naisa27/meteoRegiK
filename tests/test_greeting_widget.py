@@ -37,7 +37,8 @@ def test_greeting_widget_emits_data_browser_requested_on_button_click():
     widget.data_browser_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
 
     buttons = widget.findChildren(QPushButton)
-    assert len(buttons) == 5  # четыре кнопки "Работы с данными" + "Справочники"
+    # три кнопки "Работы с данными", "Отклонения от нормы", "Справочники", "Дашборд" и "Карта"
+    assert len(buttons) == 7
     data_browser_btn = next(b for b in buttons if b.text() == "Просмотр исходных данных")
     data_browser_btn.click()
 
@@ -82,5 +83,31 @@ def test_greeting_widget_dashboard_button_has_icon_and_emits_signal():
     dashboard_btn = next(b for b in widget.findChildren(QPushButton) if b.text() == "Дашборд")
     assert not dashboard_btn.icon().isNull()
     dashboard_btn.click()
+
+    assert emitted["n"] == 1
+
+
+def test_greeting_widget_map_button_emits_signal_and_differs_from_dashboard():
+    _qapp()
+    widget = GreetingWidget()
+
+    emitted = {"n": 0}
+    widget.map_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
+
+    buttons = {b.text(): b for b in widget.findChildren(QPushButton)}
+    buttons["Карта"].click()
+
+    assert emitted["n"] == 1
+    assert buttons["Карта"].styleSheet() != buttons["Дашборд"].styleSheet()
+
+
+def test_greeting_widget_anomaly_calc_button_emits_signal():
+    _qapp()
+    widget = GreetingWidget()
+
+    emitted = {"n": 0}
+    widget.anomaly_calc_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
+
+    next(b for b in widget.findChildren(QPushButton) if b.text() == "Отклонения от нормы").click()
 
     assert emitted["n"] == 1

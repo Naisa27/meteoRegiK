@@ -29,6 +29,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
+from meteoregik.calculations.anomalies import mark_stale
 from meteoregik.calculations.temperature import Stats, daily_stats, decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings
 
@@ -255,7 +256,14 @@ def recompute_range(
     """progress_callback(day), если передан, вызывается после пересчёта
     каждого дня диапазона. conflict_resolver(ValueConflict), если передан,
     вызывается при расхождении пересчитанного значения с уже сохранённым —
-    должен вернуть "old" или "new"; без него побеждает новое значение."""
+    должен вернуть "old" или "new"; без него побеждает новое значение.
+
+    Нормы и отклонения станции (calculations/anomalies.py) здесь не
+    пересчитываются — станция только помечается требующей расчёта. Пометка —
+    первым делом: если пересчёт оборвётся на середине, станция всё равно не
+    останется со старыми отклонениями при новых суточных значениях."""
+    with engine.begin() as conn:
+        mark_stale(conn, wmo_index)
     day = start
     while day <= end:
         stats = daily_stats(engine, wmo_index, day)

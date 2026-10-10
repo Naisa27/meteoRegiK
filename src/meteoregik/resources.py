@@ -30,6 +30,8 @@ STATIC_DIR = _BASE_DIR / "static"
 APP_ICON_PATH = STATIC_DIR / "app_icon.ico"
 LOGO_PATH = STATIC_DIR / "meteo_1.png"
 DASHBOARD_ICON_PATH = STATIC_DIR / "snowman-alt_24.png"
+# Страница экрана "Карта"; рядом с ней — leaflet.js/.css и outline.js (границы)
+MAP_PAGE_PATH = STATIC_DIR / "map" / "map.html"
 
 # sqlite-шаблон с уже залитыми справочниками stations/ru_regions — результат
 # разовой заливки из метеостанции_с_координатами.xlsx / Регионы_РФ.xlsx на
