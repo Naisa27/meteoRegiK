@@ -47,6 +47,12 @@ _TEXT_PRIMARY = theme.TEXT_PRIMARY
 _TEXT_SECONDARY = theme.TEXT_SECONDARY
 _ACCENT = theme.ACCENT
 
+# Сторона иконки в шапке и отступ шапки от краёв окна.
+_LOGO_SIZE = 192
+_HEADER_MARGIN = 24
+# Минимальный зазор между иконкой и текстом шапки в самом узком окне.
+_LOGO_GAP = 16
+
 
 def _format_date_ru(now: datetime) -> str:
     weekday = _WEEKDAYS_RU[now.weekday()].capitalize()
@@ -73,27 +79,42 @@ class GreetingWidget(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 48, 0, 0)
+        layout.setContentsMargins(0, _HEADER_MARGIN, 0, 0)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         layout.setSpacing(6)
 
-        icon = QLabel()
+        # Шапка (правка 2026-10-10): иконка — в левом верхнем углу, приветствие
+        # и подзаголовок — в одном ряду с ней. Иконка крупная (вдвое выше
+        # блока заголовка) и стоит вне раскладки, поверх фона: в ряду она
+        # растянула бы его на всю свою высоту и сдвинула вниз часы и кнопки.
+        # Место под неё в ряду шапки зарезервировано отступами с обеих
+        # сторон: левый не даёт тексту наехать на иконку в узком окне, а
+        # правый той же ширины нужен, чтобы текст центрировался по всему
+        # окну — как часы и кнопки ниже, — а не по остатку справа от иконки.
+        icon = QLabel(self)
         icon.setStyleSheet("background: transparent;")
+        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        icon.setGeometry(_HEADER_MARGIN, _HEADER_MARGIN, _LOGO_SIZE, _LOGO_SIZE)
         pixmap = QPixmap(str(LOGO_PATH))
         if not pixmap.isNull():
             icon.setPixmap(
-                pixmap.scaledToWidth(96, Qt.TransformationMode.SmoothTransformation)
+                pixmap.scaledToWidth(_LOGO_SIZE, Qt.TransformationMode.SmoothTransformation)
             )
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(icon)
-        layout.addSpacing(12)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(_HEADER_MARGIN, 0, _HEADER_MARGIN, 0)
+        header.setSpacing(0)
+        header.addSpacing(_LOGO_SIZE + _LOGO_GAP)
+
+        titles = QVBoxLayout()
+        titles.setSpacing(6)
 
         headline = QLabel("Добро пожаловать в meteoRegiK")
         headline_font = QFont("Constantia", 21)
         headline.setFont(headline_font)
         headline.setStyleSheet(f"color: {_TEXT_PRIMARY}; background: transparent;")
         headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(headline)
+        titles.addWidget(headline)
 
         subtitle = QLabel(
             "Программа для работы с агрометеорологическими наблюдениями:\n"
@@ -102,7 +123,11 @@ class GreetingWidget(QWidget):
         subtitle.setFont(QFont("Segoe UI", 11))
         subtitle.setStyleSheet(f"color: {_TEXT_SECONDARY}; background: transparent;")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(subtitle)
+        titles.addWidget(subtitle)
+
+        header.addLayout(titles, 1)
+        header.addSpacing(_LOGO_SIZE + _LOGO_GAP)
+        layout.addLayout(header)
 
         layout.addSpacing(28)
 
