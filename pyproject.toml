@@ -1,6 +1,6 @@
 [project]
 name = "meteoregik"
-version = "0.1.0"
+version = "0.1.1"
 description = "Десктопное приложение для работы с агрометеорологическими данными: импорт из Excel (rp5/ГГ), статистика, просмотр/редактирование, карта, дашборд, экспорт"
 authors = [
     { name = "Naisa", email = "naisa@mail.ru" }
