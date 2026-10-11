@@ -87,9 +87,10 @@ def test_dialog_lists_stations_with_their_state(engine):
     dialog = AnomalyCalcDialog(engine)
 
     rows = {row[0]: row for row in _texts(dialog.table)}
-    assert rows["Мосальск (27704)"][1:] == ["01.01.2020–31.12.2020", "требуется расчёт", "—"]
+    assert rows["Мосальск (27704)"][1:] == ["01.01.2020–31.12.2020", "требуется расчёт", "—", "—"]
     assert rows["Сухиничи (27707)"][2].startswith("рассчитано ")
     assert rows["Сухиничи (27707)"][3] == "по архиву 2020–2020 (1 год)"
+    assert rows["Сухиничи (27707)"][4] == "нет данных об осадках"  # в базе только температура
     assert dialog._summary.text() == "Требуют расчёта: 1 из 2."
     assert dialog.calc_btn.isEnabled() and dialog.recalc_all_btn.isEnabled()
 
@@ -141,3 +142,21 @@ def test_dialog_without_data(tmp_path):
 
     assert dialog._summary.text() == "Данные ещё не залиты — рассчитывать нечего."
     assert not dialog.calc_btn.isEnabled() and not dialog.recalc_all_btn.isEnabled()
+
+
+def test_dialog_names_both_parameters_and_groups_their_norm_columns(engine):
+    """В окне сказано, о чём расчёт, и у каждого параметра свой столбец нормы."""
+    from meteoregik.calculations.anomalies import NormBase
+    from meteoregik.ui.anomaly_calc_dialog import COLUMNS, GROUP_NORM, _INTRO, precipitation_norm_text
+
+    assert "температуры и осадков" in _INTRO
+    assert [(column.title, column.group) for column in COLUMNS[-2:]] == [
+        ("Температура", GROUP_NORM), ("Осадки", GROUP_NORM),
+    ]
+    moment = datetime(2026, 10, 12, 9, 0)
+    with_rain = CalcStatus(1, PERIOD, moment, True, 1991, 2020, 30, NormBase(False, 2006, 2024, 9))
+    assert precipitation_norm_text(with_rain) == "по архиву 2006–2024 (9 лет)"
+    assert precipitation_norm_text(CalcStatus(1, PERIOD, moment, precipitation=NormBase())) == (
+        "нет полных лет — годовой нормы нет"
+    )
+    assert precipitation_norm_text(CalcStatus(1, PERIOD, None)) == "—"

@@ -49,9 +49,16 @@ calculations/recompute.py для диалога разрешения конфл�
 (computed_indicators, parameter='R'; calculations/precipitation.py). По уже
 залитым станциям суммы досчитываются из сырых данных, иначе осадки появились
 бы только у станций, залитых после обновления программы. Станции помечаются
-требующими расчёта отклонений. Таблицы не меняются; расчёт берётся из
-текущего кода — следующие миграции, меняющие правила сумм, просто
-пересчитают их ещё раз.
+требующими расчёта отклонений. Таблицы не меняются. Сам пересчёт выполняет
+миграция 8 (см. ниже) — она идёт следом и считает те же суммы заново.
+
+Миграция 8 — нормы и отклонения осадков, сезоны. Новая таблица norm_bases
+(база нормы по ключу "станция, параметр" — у температуры и осадков она
+разная); сведения о базе нормы уходят туда из anomaly_state, и та
+пересоздаётся без этих столбцов. Обе таблицы — производные данные расчёта
+отклонений: после миграции все станции требуют расчёта и досчитываются при
+открытии дашборда, карты или по кнопке. Суммы осадков пересчитываются ещё
+раз — к ним добавились сезонные (period_type='season').
 
 Обновление у пользователя (решение 2026-10-11). Миграции с пересчётом
 данных перечислены в DATA_UPDATES: что именно досчитывается, словами для
@@ -69,7 +76,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import inspect, select
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations import precipitation
@@ -78,19 +85,21 @@ from meteoregik.db.schema import (
     computed_indicators,
     gg_readings,
     metadata,
+    norm_bases,
     period_completeness,
     rp5_readings,
     schema_version,
     station_norms,
 )
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
 # Текст видит пользователь в окне обновления.
 DATA_UPDATES: dict[int, str] = {
     7: "суммы осадков за сутки, декаду, месяц и год",
+    8: "суммы осадков по сезонам (зима, весна, лето, осень)",
 }
 BACKUP_SUFFIX = "_до_обновления"
 
@@ -166,6 +175,8 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_6(conn)
             if version < 7:
                 _migrate_to_7(conn, progress)
+            if version < 8:
+                _migrate_to_8(conn, progress)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -201,11 +212,23 @@ def _migrate_to_6(conn: Connection) -> None:
     metadata.create_all(conn, tables=[station_norms, period_completeness, anomaly_state], checkfirst=True)
 
 
-def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:
+def _rebuild_precipitation(conn: Connection, progress: StationProgress | None) -> None:
+    """Пересчитать суммы осадков всех станций с сырыми данными."""
     wmo_indexes = precipitation.stations_with_readings(conn)
     for number, wmo_index in enumerate(wmo_indexes, start=1):
         if progress is not None:
             progress(number, len(wmo_indexes), wmo_index)
         precipitation.rebuild_station(conn, wmo_index)
-        # То же, что anomalies.mark_stale: суточные значения станции изменились
-        conn.execute(delete(anomaly_state).where(anomaly_state.c.wmo_index == wmo_index))
+
+
+def _migrate_to_8(conn: Connection, progress: StationProgress | None = None) -> None:
+    # Строки состояния со старыми столбцами не нужны: расчёт устарел у всех
+    conn.exec_driver_sql("DROP TABLE IF EXISTS anomaly_state")
+    metadata.create_all(conn, tables=[anomaly_state, norm_bases], checkfirst=True)
+    _rebuild_precipitation(conn, progress)
+
+
+def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:
+    """Суммы осадков по залитым данным. Сам пересчёт делает миграция 8: она
+    всегда идёт следом и пересчитывает те же суммы уже вместе с сезонными —
+    считать дважды незачем (версия 7 отдельно пользователям не выпускалась)."""

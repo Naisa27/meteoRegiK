@@ -59,7 +59,10 @@ def _version(engine) -> int:
 def test_old_database_with_data_has_pending_updates_named_for_the_user(old_database):
     _db_path, engine = old_database
 
-    assert pending_data_updates(engine) == ["суммы осадков за сутки, декаду, месяц и год"]
+    assert pending_data_updates(engine) == [
+        "суммы осадков за сутки, декаду, месяц и год",
+        "суммы осадков по сезонам (зима, весна, лето, осень)",
+    ]
 
 
 def test_nothing_is_pending_for_current_new_or_empty_database(tmp_path, old_database):
@@ -108,7 +111,7 @@ def test_run_upgrade_calculates_makes_backup_and_reports_stations(old_database, 
     assert run_upgrade(engine, db_path, pending_data_updates(engine)) is True
 
     assert _version(engine) == CURRENT_SCHEMA_VERSION
-    assert _precipitation_rows(engine) == 4  # день, декада, месяц, год
+    assert _precipitation_rows(engine) == 5  # день, декада, месяц, сезон, год
     assert backup_path(db_path).exists()
     assert shown == [(1, 1, "Сухиничи (27707)")]
 

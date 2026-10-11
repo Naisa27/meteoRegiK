@@ -7,6 +7,13 @@
 досчитывают помеченные станции сами; это окно — способ посчитать всё
 заранее и увидеть, по какой базе нормы посчитана каждая станция.
 
+Параметров два — температура и осадки (корректировка 2026-10-11). Раньше в
+окне нигде не было сказано, о чём расчёт; теперь вступление называет оба, а
+база нормы каждого — в своём столбце под общей шапкой "Норма (база)":
+полнота у них считается по-разному, и у одной станции температура может
+иметь норму ВМО, а осадки — только "по архиву". Станция считается одной
+кнопкой сразу по обоим параметрам, состояние у неё одно.
+
 Расчёт идёт в GUI-потоке с обновлением полосы прогресса после каждой
 станции, как пересчёт агрегатов в ui/import_dialog.py: станция считается
 доли секунды, а прервать расчёт на середине должно быть нельзя.
@@ -35,6 +42,7 @@ from meteoregik.calculations.anomalies import (
     NORM_BASE_FIRST_YEAR,
     NORM_BASE_LAST_YEAR,
     CalcStatus,
+    NormBase,
     calculation_status,
     ensure_fresh,
 )
@@ -46,11 +54,14 @@ from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
 
 _TITLE = "Отклонения от нормы"
 _INTRO = (
-    "Норма станции и отклонения от неё за декады, месяцы и годы хранятся в базе. "
+    "Нормы температуры и осадков станции и отклонения от них хранятся в базе: "
+    "у средней температуры — за декады, месяцы и годы, у суммы осадков — ещё и за сезоны. "
     "После импорта или правки данных станция помечается «требуется расчёт»: "
-    "норма зависит от всего архива, поэтому пересчитывается станция целиком. "
+    "норма зависит от всего архива, поэтому станция пересчитывается целиком, сразу по обоим параметрам. "
     "Дашборд и карта досчитывают такие станции сами, когда их открывают."
 )
+GROUP_NORM = "Норма (база)"
+NO_PRECIPITATION = "нет данных об осадках"
 STATE_STALE = "требуется расчёт"
 _NO_VALUE = "—"
 
@@ -77,15 +88,25 @@ def state_text(status: CalcStatus) -> str:
     return f"рассчитано {status.calculated_at:%d.%m.%Y %H:%M}"
 
 
+def base_text(base: NormBase) -> str:
+    """По какой базе посчитана годовая норма параметра."""
+    if not base.years:
+        return "нет полных лет — годовой нормы нет"
+    if base.standard:
+        return f"ВМО {NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR} ({_years_text(base.years)})"
+    return f"по архиву {base.first_year}–{base.last_year} ({_years_text(base.years)})"
+
+
 def norm_text(status: CalcStatus) -> str:
-    """По какой базе посчитана годовая норма станции."""
+    """База нормы температуры станции."""
+    return _NO_VALUE if status.stale else base_text(status.temperature)
+
+
+def precipitation_norm_text(status: CalcStatus) -> str:
+    """База нормы осадков станции."""
     if status.stale:
         return _NO_VALUE
-    if not status.norm_years:
-        return "нет полных лет — годовой нормы нет"
-    if status.norm_standard:
-        return f"ВМО {NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR} ({_years_text(status.norm_years)})"
-    return f"по архиву {status.norm_first_year}–{status.norm_last_year} ({_years_text(status.norm_years)})"
+    return base_text(status.precipitation) if status.precipitation is not None else NO_PRECIPITATION
 
 
 def summary_text(statuses: list[CalcStatus]) -> str:
@@ -104,14 +125,23 @@ def _period_key(period: tuple[date, date]) -> int:
 COLUMNS = [
     Column("Станция", lambda r: r.label, lambda r: r.label.casefold()),
     Column("Период данных", lambda r: format_period(r.status.period), lambda r: _period_key(r.status.period),
-           tip="Первый и последний день с суточной средней температурой"),
+           tip="Первый и последний день с суточной температурой или суммой осадков"),
     Column("Состояние", lambda r: state_text(r.status),
            lambda r: r.status.calculated_at.timestamp() if r.status.calculated_at else 0.0,
            tip="Когда нормы и отклонения станции посчитаны в последний раз"),
-    Column("Норма", lambda r: norm_text(r.status), lambda r: norm_text(r.status),
+    Column("Температура", lambda r: norm_text(r.status), lambda r: norm_text(r.status), group=GROUP_NORM,
            tip=(
                f"Стандартная норма ВМО — средняя за {NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR}; "
-               "если полных лет в этом периоде меньше 24 — средняя по всему архиву станции"
+               "если полных лет в этом периоде меньше 24 — средняя по всему архиву станции. "
+               "Месяц полный, если пропущено не больше 5 дней и не больше 3 подряд"
+           )),
+    Column("Осадки", lambda r: precipitation_norm_text(r.status), lambda r: precipitation_norm_text(r.status),
+           group=GROUP_NORM,
+           tip=(
+               f"Та же база, что у температуры: {NORM_BASE_FIRST_YEAR}–{NORM_BASE_LAST_YEAR} "
+               "при 24 и более полных годах, иначе весь архив. Но месяц полный, только если "
+               "осадки есть за каждый день: пропущенный день сумму занижает — "
+               "поэтому полных лет у осадков обычно меньше"
            )),
 ]
 
@@ -123,7 +153,7 @@ class AnomalyCalcDialog(QDialog):
         self.engine = engine
         self._statuses: list[CalcStatus] = []
         self.setWindowTitle(_TITLE)
-        self.resize(820, 520)
+        self.resize(1020, 540)
         self.setStyleSheet(theme.DIALOG_QSS + CALC_QSS)
         self._build_ui()
         self._reload()

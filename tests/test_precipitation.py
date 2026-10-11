@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 
 import pytest
 from sqlalchemy import select
@@ -284,7 +284,7 @@ def test_migration_adds_precipitation_to_already_loaded_stations(engine):
     with engine.begin() as conn:
         conn.execute(computed_indicators.delete().where(computed_indicators.c.parameter == "R"))
         conn.execute(anomaly_state.insert().values(
-            wmo_index=WMO_INDEX, calculated_at=date(2020, 1, 1), rule_version=1, norm_standard=False, norm_years=0,
+            wmo_index=WMO_INDEX, calculated_at=datetime(2020, 1, 1), rule_version=1,
         ))
         conn.execute(schema_version.update().values(version=6))
 

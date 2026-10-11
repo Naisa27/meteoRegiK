@@ -67,7 +67,12 @@ def station_period_bounds(engine: Engine, wmo_index: int) -> tuple[date, date] |
             select(
                 func.min(computed_indicators.c.period_start),
                 func.max(computed_indicators.c.period_end),
-            ).where(computed_indicators.c.wmo_index == wmo_index)
+            ).where(
+                computed_indicators.c.wmo_index == wmo_index,
+                # Без сезонов: зима начинается 1 декабря прошлого года, и
+                # архив с января 2015 "начинался" бы с декабря 2014
+                computed_indicators.c.period_type.in_(DETAILED_PERIOD_TYPES),
+            )
         ).one()
     if row[0] is None or row[1] is None:
         return None

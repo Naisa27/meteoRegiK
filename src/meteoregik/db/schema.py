@@ -139,7 +139,7 @@ computed_indicators = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     # wmo_index, не station_id — см. комментарий у gg_readings выше.
     Column("wmo_index", Integer, nullable=False),
-    Column("period_type", Text, nullable=False),  # 'day' | 'decade' | 'month' | 'year'
+    Column("period_type", Text, nullable=False),  # 'day' | 'decade' | 'month' | 'year' | 'season'
     Column("period_start", Date, nullable=False),
     Column("period_end", Date, nullable=False),
     Column("parameter", Text, nullable=False),  # 'T', позже 'RRR' и др.
@@ -161,7 +161,8 @@ computed_indicators = Table(
 # --- сохранённый расчёт отклонений от нормы (миграция 6, calculations/anomalies.py) ---
 
 # Нормы станции. period_type: 'month' (month = 1–12), 'decade' (month и
-# decade = 1–3) или 'year' (month = decade = 0). Нули вместо NULL — чтобы
+# decade = 1–3), 'season' (month — первый месяц сезона: 12, 3, 6 или 9;
+# только осадки) или 'year' (month = decade = 0). Нули вместо NULL — чтобы
 # уникальность работала (в SQLite NULL в UNIQUE не равен NULL).
 station_norms = Table(
     "station_norms",
@@ -186,7 +187,7 @@ period_completeness = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("wmo_index", Integer, nullable=False),
     Column("parameter", Text, nullable=False),
-    Column("period_type", Text, nullable=False),  # 'month' | 'year'
+    Column("period_type", Text, nullable=False),  # 'month' | 'year' | 'season' (осадки)
     Column("period_start", Date, nullable=False),
     Column("days_with_data", Integer, nullable=False),
     Column("complete", Boolean, nullable=False),
@@ -203,11 +204,23 @@ anomaly_state = Table(
     Column("wmo_index", Integer, primary_key=True, autoincrement=False),
     Column("calculated_at", DateTime, nullable=False),
     Column("rule_version", Integer, nullable=False),
-    # База нормы: True — ВМО 1991–2020, False — весь архив; NULL и пустые
-    # годы — полных лет нет, годовой нормы нет
-    Column("norm_standard", Boolean, nullable=False),
-    Column("norm_first_year", Integer, nullable=True),
-    Column("norm_last_year", Integer, nullable=True),
-    Column("norm_years", Integer, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+)
+
+# База нормы станции по параметру (миграция 8; до неё — столбцы anomaly_state,
+# когда параметр был один): полнота у температуры и осадков считается
+# по-разному, и полных лет у них разное число — у одной станции температура
+# может иметь норму ВМО, а осадки — только "по архиву".
+# standard: True — ВМО 1991–2020, False — весь архив; years = 0 и пустые
+# границы — полных лет нет, годовой нормы нет.
+norm_bases = Table(
+    "norm_bases",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("parameter", Text, primary_key=True),
+    Column("standard", Boolean, nullable=False),
+    Column("first_year", Integer, nullable=True),
+    Column("last_year", Integer, nullable=True),
+    Column("years", Integer, nullable=False),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
 )

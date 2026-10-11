@@ -30,6 +30,13 @@
 
 Декада, месяц, год — суммы суточных значений. Месяц через декады дал бы то
 же число: декады делят месяц без остатка.
+
+Сезон (period_type='season', только у осадков): зима — декабрь прошлого
+года, январь, февраль; весна — март–май; лето — июнь–август; осень —
+сентябрь–ноябрь (решение пользователя 2026-10-11). Сезон хранится, а не
+считается на лету: зима лежит в двух календарных годах, и собирать её из
+месяцев пришлось бы в каждом экране заново. Год сезона — год, в котором он
+заканчивается (зима 2020 = декабрь 2019 – февраль 2020).
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ from calendar import monthrange
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import Integer, cast, delete, func, select
 from sqlalchemy.engine import Connection, Engine
@@ -53,6 +60,49 @@ ROUND_DIGITS = 1
 SERIES_PERIOD_HOURS = 12
 
 Stats = dict[str, float | None]
+
+PERIOD_SEASON = "season"
+SEASON_NAMES: dict[int, str] = {12: "зима", 3: "весна", 6: "лето", 9: "осень"}  # по первому месяцу
+
+
+def _month_end(year: int, month: int) -> date:
+    return date(year, month, monthrange(year, month)[1])
+
+
+def season_bounds(day: date) -> tuple[date, date]:
+    """Границы сезона, в который попадает day."""
+    if day.month == 12:
+        return date(day.year, 12, 1), _month_end(day.year + 1, 2)
+    if day.month <= 2:
+        return date(day.year - 1, 12, 1), _month_end(day.year, 2)
+    first_month = 3 * (day.month // 3)
+    return date(day.year, first_month, 1), _month_end(day.year, first_month + 2)
+
+
+def season_months(season_start: date) -> list[tuple[int, int]]:
+    """Три месяца сезона: [(год, месяц), ...]."""
+    months = []
+    year, month = season_start.year, season_start.month
+    for _ in range(3):
+        months.append((year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
+
+
+def season_year(season_start: date) -> int:
+    """Год сезона — год, в котором он заканчивается."""
+    return season_start.year + 1 if season_start.month == 12 else season_start.year
+
+
+def seasons_in_range(start: date, end: date) -> list[tuple[date, date]]:
+    """Сезоны, которые задевает диапазон дат."""
+    seasons = []
+    day = start
+    while day <= end:
+        bounds = season_bounds(day)
+        seasons.append(bounds)
+        day = bounds[1] + timedelta(days=1)
+    return seasons
 
 
 @dataclass(frozen=True)
@@ -164,13 +214,13 @@ def aggregate(day_values: Iterable[float]) -> float | None:
 
 
 def _period_rows(days: dict[date, float]) -> list[dict[str, object]]:
-    """Строки декад, месяцев и лет по суточным суммам (без дат вне days)."""
+    """Строки декад, месяцев, сезонов и лет по суточным суммам (без дат вне days)."""
     totals: dict[tuple[str, date, date], list[float]] = {}
     for day, value in days.items():
-        month_end = date(day.year, day.month, monthrange(day.year, day.month)[1])
         for key in (
             ("decade", *decade_bounds(day)),
-            ("month", date(day.year, day.month, 1), month_end),
+            ("month", date(day.year, day.month, 1), _month_end(day.year, day.month)),
+            (PERIOD_SEASON, *season_bounds(day)),
             ("year", date(day.year, 1, 1), date(day.year, 12, 31)),
         ):
             totals.setdefault(key, []).append(value)

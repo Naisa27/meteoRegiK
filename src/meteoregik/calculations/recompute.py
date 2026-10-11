@@ -1,6 +1,6 @@
 """Пересчёт computed_indicators при правке/добавлении/удалении сырых строк
-через интерфейс — только затронутый диапазон (день -> декада -> месяц -> год)
-для конкретной станции.
+через интерфейс — только затронутый диапазон (день -> декада -> месяц -> год,
+у осадков ещё сезон) для конкретной станции.
 
 Параметров два (корректировка 2026-10-11): температура ("T": avg/min/max) и
 осадки ("R": sum, calculations/precipitation.py). Порядок пересчёта у них
@@ -339,8 +339,14 @@ def recompute_range(
         for year, month in _months_in_range(start, end)
     ]
     periods += [("year", date(year, 1, 1), date(year, 12, 31)) for year in range(start.year, end.year + 1)]
-    for period_type, period_start, period_end in periods:
+    seasons = [
+        (precipitation.PERIOD_SEASON, season_start, season_end)
+        for season_start, season_end in precipitation.seasons_in_range(start, end)
+    ]
+    for period_type, period_start, period_end in periods + seasons:
         for parameter, period_stats in _PERIOD_STATS.items():
+            if period_type == precipitation.PERIOD_SEASON and parameter != precipitation.PARAMETER:
+                continue  # сезонные значения есть только у осадков
             stats = period_stats(_stored_days(engine, wmo_index, parameter, period_start, period_end))
             _resolve_and_store(
                 engine, wmo_index, parameter, period_type, period_start, period_end, stats, None, conflict_resolver
