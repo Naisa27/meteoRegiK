@@ -44,13 +44,22 @@ calculations/recompute.py для диалога разрешения конфл�
 база к этому моменту уже с данными, пересоздавать нечего и нельзя. Строк
 состояния ни у одной станции нет, поэтому все станции считаются требующими
 расчёта и досчитываются при первом открытии дашборда или карты.
+
+Миграция 7 — данные, а не схема: появился второй параметр, сумма осадков
+(computed_indicators, parameter='R'; calculations/precipitation.py). По уже
+залитым станциям суммы досчитываются из сырых данных, иначе осадки появились
+бы только у станций, залитых после обновления программы. Станции помечаются
+требующими расчёта отклонений. Таблицы не меняются; расчёт берётся из
+текущего кода — следующие миграции, меняющие правила сумм, просто
+пересчитают их ещё раз.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import inspect, select
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.engine import Connection, Engine
 
+from meteoregik.calculations import precipitation
 from meteoregik.db.schema import (
     anomaly_state,
     computed_indicators,
@@ -62,7 +71,7 @@ from meteoregik.db.schema import (
     station_norms,
 )
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 def run_migrations(engine: Engine) -> None:
@@ -88,6 +97,8 @@ def run_migrations(engine: Engine) -> None:
                 _migrate_to_5(conn)
             if version < 6:
                 _migrate_to_6(conn)
+            if version < 7:
+                _migrate_to_7(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -121,3 +132,10 @@ def _migrate_to_5(conn: Connection) -> None:
 
 def _migrate_to_6(conn: Connection) -> None:
     metadata.create_all(conn, tables=[station_norms, period_completeness, anomaly_state], checkfirst=True)
+
+
+def _migrate_to_7(conn: Connection) -> None:
+    for wmo_index in precipitation.stations_with_readings(conn):
+        precipitation.rebuild_station(conn, wmo_index)
+        # То же, что anomalies.mark_stale: суточные значения станции изменились
+        conn.execute(delete(anomaly_state).where(anomaly_state.c.wmo_index == wmo_index))

@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from meteoregik.calculations.precipitation import PARAMETER as PRECIPITATION
 from meteoregik.calculations.recompute import ConflictChoice, ValueConflict, recompute_range
 from meteoregik.importers.base import ImportFormatError, ImportReport
 from meteoregik.importers.gg_importer import GgImporter
@@ -72,11 +73,18 @@ _PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "�
 _STAT_TYPE_NAMES = {"avg": "средняя", "min": "минимальная", "max": "максимальная"}
 
 
+def _indicator_name(conflict: ValueConflict) -> str:
+    if conflict.parameter == PRECIPITATION:
+        return "сумма осадков"
+    stat = _STAT_TYPE_NAMES.get(conflict.stat_type, conflict.stat_type)
+    return f"{stat} температура"
+
+
 def format_conflict_message(conflict: ValueConflict) -> str:
     """Текст диалога расхождения значений — вынесено из ImportDialog, чтобы
     тестировать без QApplication."""
     period = _PERIOD_TYPE_NAMES.get(conflict.period_type, conflict.period_type)
-    stat = _STAT_TYPE_NAMES.get(conflict.stat_type, conflict.stat_type)
+    indicator = _indicator_name(conflict)
     old_source = conflict.old_source_file or "неизвестный файл"
     new_source = conflict.new_source_file or "неизвестный файл"
     period_range = (
@@ -85,7 +93,7 @@ def format_conflict_message(conflict: ValueConflict) -> str:
         else f"{conflict.period_start.isoformat()} — {conflict.period_end.isoformat()}"
     )
     return (
-        f"Показатель «{stat} температура», период: {period} ({period_range}).\n\n"
+        f"Показатель «{indicator}», период: {period} ({period_range}).\n\n"
         f"Сохранено (из файла «{old_source}»): {conflict.old_value}\n"
         f"Рассчитано сейчас (из файла «{new_source}»): {conflict.new_value}\n\n"
         "Какое значение оставить?"

@@ -103,7 +103,9 @@ def _rp5_columns() -> list[tuple[str, str, bool]]:
 
 
 RP5_COLUMNS = _rp5_columns()
-RP5_TEMP_COLUMNS = {"T_temperature"}
+# Столбцы, правка которых меняет расчётные показатели (температура и, с
+# 2026-10-11, осадки: количество и период, за который оно записано).
+RP5_TEMP_COLUMNS = {"T_temperature", "RRR_precipitation", "tR_precipitation_period"}
 # Всегда на экране, в фильтр полей не входят.
 RP5_FIXED_COLUMNS = ("wmo_index", "station_name", "obs_date", "obs_time")
 
@@ -117,7 +119,7 @@ GG_COLUMNS: list[tuple[str, str, bool]] = [
     ("rrr_precipitation", "RRR", True),
     ("source_file", "Файл", False),
 ]
-GG_TEMP_COLUMNS = {"t_avg", "t_min", "t_max"}
+GG_TEMP_COLUMNS = {"t_avg", "t_min", "t_max", "rrr_precipitation"}
 GG_FIXED_COLUMNS = ("wmo_index", "station_name", "obs_date")
 
 # Расшифровки для окна выбора полей (db-имя колонки -> описание); заголовок

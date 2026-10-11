@@ -194,3 +194,34 @@ def test_data_browser_dialog_builds_with_rp5_default(tmp_path):
 
     assert dialog._model.table is rp5_readings
     assert "border-radius" in dialog.styleSheet()
+
+
+def test_editing_precipitation_cell_recomputes_the_daily_sum(tmp_path):
+    """Правка количества осадков в ячейке меняет расчётную сумму — как правка
+    температуры меняет среднюю."""
+    from meteoregik.ui.data_browser import RP5_SPEC
+
+    _qapp()
+    engine = _make_engine(tmp_path)
+    _insert_rp5_rows(
+        engine,
+        [{"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1), "obs_time": time(9, 0), "T_temperature": 1.0,
+          "RRR_precipitation": "2", "tR_precipitation_period": 12.0}],
+    )
+    recompute_range(engine, WMO_INDEX, date(2020, 1, 1), date(2020, 1, 1))
+
+    model = ReadingsTableModel(engine, rp5_readings, RP5_COLUMNS, RP5_SPEC.temp_columns)
+    model.reload()
+    col = [c[0] for c in RP5_COLUMNS].index("RRR_precipitation")
+
+    assert model.setData(model.index(0, col), "7.5") is True
+
+    with engine.connect() as conn:
+        day_sum = conn.execute(
+            select(computed_indicators.c.value).where(
+                computed_indicators.c.wmo_index == WMO_INDEX,
+                computed_indicators.c.period_type == "day",
+                computed_indicators.c.parameter == "R",
+            )
+        ).scalar_one()
+    assert day_sum == 7.5

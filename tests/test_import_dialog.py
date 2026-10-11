@@ -101,6 +101,19 @@ def test_format_conflict_message_day_level():
     assert "-2.5" in text
 
 
+def test_format_conflict_message_names_precipitation():
+    conflict = ValueConflict(
+        wmo_index=27707, period_type="day", period_start=date(2020, 1, 10), period_end=date(2020, 1, 10),
+        stat_type="sum", old_value=6.0, old_source_file="rp5.xls", new_value=6.5, new_source_file="gg.xlsx",
+        parameter="R",
+    )
+
+    text = format_conflict_message(conflict)
+
+    assert "Показатель «сумма осадков»" in text
+    assert "температура" not in text
+
+
 def test_format_conflict_message_without_source_file():
     conflict = ValueConflict(
         wmo_index=27707,

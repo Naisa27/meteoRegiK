@@ -188,3 +188,58 @@ def test_export_without_chart_points_skips_chart_sheet(tmp_path):
         parameters=[AVG],
     )
     assert openpyxl.load_workbook(out_path).sheetnames == ["Данные", "Данные для графика"]
+
+
+# --- осадки: столбцами, вместе с температурой — на второй оси ---
+
+RAIN = ("R", "sum")
+
+
+def _chart_data_with_rain() -> ChartData:
+    return ChartData(
+        x_labels=["2020", "2021"], series={AVG: [5.9, 7.3], RAIN: [612.4, 580.0], MIN: [-10.0, -8.0]}, x_title="Год"
+    )
+
+
+def test_export_chart_draws_precipitation_as_bars_on_second_axis(tmp_path):
+    root = _chart_xml(tmp_path, _chart_data_with_rain(), [AVG, RAIN, MIN])
+
+    bar_series = root.findall(".//c:barChart/c:ser", _NS)
+    line_series = root.findall(".//c:lineChart/c:ser", _NS)
+    assert len(bar_series) == 1 and len(line_series) == 2
+    # ряды ссылаются на свои столбцы листа данных: B — t средняя, C — осадки, D — t Мин
+    assert [ser.find("c:val/c:numRef/c:f", _NS).text.split("!")[1][1] for ser in line_series] == ["B", "D"]
+    assert bar_series[0].find("c:val/c:numRef/c:f", _NS).text.split("!")[1][1] == "C"
+
+    titles = {
+        _val(ax, "c:axId"): "".join(t.text for t in ax.iterfind("c:title//a:t", _NS))
+        for ax in root.findall(".//c:valAx", _NS)
+    }
+    assert titles == {"100": "Температура, °C", "200": "Осадки, мм"}
+    bar_axis = next(ax for ax in root.findall(".//c:valAx", _NS) if _val(ax, "c:axId") == "200")
+    assert _val(bar_axis, "c:crosses") == "max"  # ось осадков — справа
+    assert _val(bar_axis, "c:delete") == "0"
+
+
+def test_export_chart_with_precipitation_only_is_a_bar_chart(tmp_path):
+    root = _chart_xml(tmp_path, _chart_data_with_rain(), [RAIN])
+
+    assert len(root.findall(".//c:barChart/c:ser", _NS)) == 1
+    assert root.find(".//c:lineChart", _NS) is None
+    val_ax = root.find(".//c:valAx", _NS)
+    assert "".join(t.text for t in val_ax.iterfind("c:title//a:t", _NS)) == "Осадки, мм"
+    assert _val(val_ax, "c:axPos") == "l"
+
+
+def test_export_formats_precipitation_with_one_decimal(tmp_path):
+    out_path = tmp_path / "export.xlsx"
+    grid = Grid(rows=(Row(cells=(Cell(5.93, in_table=True), Cell(612.4, in_table=True, decimals=1))),), col_count=2)
+    export_aggregate_view(
+        out_path=out_path, station_title="Станция", primary="table", grid=grid,
+        chart_data=_chart_data_with_rain(), parameters=[AVG, RAIN],
+    )
+
+    wb = openpyxl.load_workbook(out_path)
+    assert [cell.number_format for cell in wb["Данные"][2]] == ["0.00", "0.0"]
+    flat = wb["Данные для графика"]
+    assert [flat.cell(row=3, column=col).number_format for col in (2, 3)] == ["0.00", "0.0"]

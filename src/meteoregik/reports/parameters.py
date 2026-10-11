@@ -17,6 +17,7 @@ PARAMETER_LABELS: dict[ParamKey, str] = {
     ("T", "avg"): "t средняя",
     ("T", "min"): "t Мин",
     ("T", "max"): "t макс",
+    ("R", "sum"): "сумма осадков",
 }
 
 # Порядок строк в таблице результатов = порядок словаря выше.
@@ -33,7 +34,31 @@ def label_for(key: ParamKey) -> str:
 # (не stat_type: средняя/мин/макс температуры — одна и та же ось).
 PARAMETER_QUANTITIES: dict[str, str] = {
     "T": "Температура, °C",
+    "R": "Осадки, мм",
 }
+
+# Знаков после запятой при выводе: температура хранится до сотых, осадки
+# измеряются с точностью 0.1 мм — "12.30 мм" обещало бы точность, которой нет.
+PARAMETER_DECIMALS: dict[str, int] = {"T": 2, "R": 1}
+DEFAULT_DECIMALS = 2
+
+# Величины, которые на графике рисуются столбцами, а не линией: сумма за
+# период — количество, а не состояние, между соседними суммами нет
+# промежуточных значений, которые изображала бы линия.
+BAR_PARAMETERS: frozenset[str] = frozenset({"R"})
+
+
+def decimals_for(key: ParamKey) -> int:
+    return PARAMETER_DECIMALS.get(key[0], DEFAULT_DECIMALS)
+
+
+def is_bar(key: ParamKey) -> bool:
+    return key[0] in BAR_PARAMETERS
+
+
+def quantity_title(keys: list[ParamKey]) -> str:
+    """Подпись оси для показателей одной величины; пусто, если их нет."""
+    return value_axis_title(keys) if keys else ""
 
 
 def value_axis_title(parameters: list[ParamKey]) -> str:

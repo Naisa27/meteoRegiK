@@ -35,7 +35,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from meteoregik.reports.aggregate_query import MonthSlice, Stats, YearSlice
-from meteoregik.reports.parameters import ParamKey, label_for
+from meteoregik.reports.parameters import DEFAULT_DECIMALS, ParamKey, decimals_for, label_for
 
 Align = Literal["left", "center", "right"]
 Side = Literal["top", "bottom", "left", "right"]
@@ -71,6 +71,9 @@ class Cell:
     bold: bool = False
     color: TextColor | None = None
     fill: Fill | None = None
+    # Знаков после запятой у числового значения — зависит от показателя
+    # (reports/parameters.py), экран и Excel форматируют одинаково.
+    decimals: int = DEFAULT_DECIMALS
     # Ячейка часть таблицы — рисуется тонкая сетка; вне таблиц линий нет.
     in_table: bool = False
     # Стороны, по которым идёт жирный ("более чёрный") контур.
@@ -99,7 +102,7 @@ def _blank_row(col_count: int) -> Row:
 
 
 def _value_cell(stats: Stats, key: ParamKey) -> Cell:
-    return Cell(value=stats.get(key))
+    return Cell(value=stats.get(key), decimals=decimals_for(key))
 
 
 def _table_rows(

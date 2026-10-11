@@ -143,7 +143,7 @@ def test_dialog_resizes_to_match_parent_window(tmp_path):
 
 def test_params_group_shows_default_selection_count(tmp_path):
     _, dialog = _dialog(tmp_path)
-    assert dialog.params_label.text() == "Выбрано: 3 из 3"
+    assert dialog.params_label.text() == "Выбрано: 4 из 4"
 
 
 # --- валидация фильтров ---
@@ -302,7 +302,7 @@ def test_choose_parameters_updates_selection_and_label(tmp_path, monkeypatch):
     dialog.params_btn.click()
 
     assert dialog._selected_parameter_keys == {("T", "avg")}
-    assert dialog.params_label.text() == "Выбрано: 1 из 3"
+    assert dialog.params_label.text() == "Выбрано: 1 из 4"
 
 
 def test_choose_parameters_cancel_keeps_previous_selection(tmp_path, monkeypatch):
@@ -311,7 +311,7 @@ def test_choose_parameters_cancel_keeps_previous_selection(tmp_path, monkeypatch
 
     dialog.params_btn.click()
 
-    assert dialog.params_label.text() == "Выбрано: 3 из 3"
+    assert dialog.params_label.text() == "Выбрано: 4 из 4"
 
 
 # --- запоминание фильтров ---
@@ -331,7 +331,7 @@ def test_preferences_are_restored_on_reopen_except_station(tmp_path):
     # станция — требование 2026-09-23, п.7: НЕ запоминается, поле пустое
     assert reopened.station_combo.currentText() == ""
     assert reopened._selected_parameter_keys == {("T", "avg"), ("T", "max")}
-    assert reopened.params_label.text() == "Выбрано: 2 из 3"
+    assert reopened.params_label.text() == "Выбрано: 2 из 4"
     assert reopened.monthly_radio.isChecked()
     assert reopened.chart_radio.isChecked()
 
@@ -426,7 +426,7 @@ def test_parameters_applied_on_done_without_apply(tmp_path, monkeypatch):
     _select_station(dialog)
     dialog.yearly_radio.setChecked(True)
     dialog.apply_btn.click()
-    assert _rows(dialog) == 4  # шапка + 3 показателя
+    assert _rows(dialog) == 5  # шапка + 4 показателя (с осадками)
 
     def fake_exec(self):
         for i in range(self.list_widget.count()):

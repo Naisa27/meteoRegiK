@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate, QTableV
 
 from meteoregik.reports import table_palette
 from meteoregik.reports.grid import Align, Cell, Fill, Grid
+from meteoregik.reports.parameters import DEFAULT_DECIMALS
 
 # Ширина дневных/декадных колонок в режиме "Подробно" достаточно узкая, чтобы
 # все 36 колонок не растягивали диалог до абсурдной ширины — минимум, не
@@ -49,11 +50,11 @@ _FILL_COLORS: dict[Fill, str] = {
 }
 
 
-def format_cell_value(value: float | str | None) -> str:
+def format_cell_value(value: float | str | None, decimals: int = DEFAULT_DECIMALS) -> str:
     if value is None:
         return ""
     if isinstance(value, float):
-        return f"{value:.2f}"
+        return f"{value:.{decimals}f}"
     return str(value)
 
 
@@ -134,7 +135,7 @@ class GridTableModel(QAbstractTableModel):
             return None
         cell = self._grid.rows[index.row()].cells[index.column()]
         if role == Qt.ItemDataRole.DisplayRole:
-            return format_cell_value(cell.value)
+            return format_cell_value(cell.value, cell.decimals)
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return _ALIGN_MAP[cell.align]
         if role == Qt.ItemDataRole.FontRole:
@@ -164,7 +165,7 @@ def _column_widths(view: QTableView, grid: Grid) -> list[int]:
             if cell.value is None:
                 continue
             metrics = bold if cell.bold else normal
-            width = metrics.horizontalAdvance(format_cell_value(cell.value)) + 2 * CELL_PADDING + 8
+            width = metrics.horizontalAdvance(format_cell_value(cell.value, cell.decimals)) + 2 * CELL_PADDING + 8
             if width > widths[col]:
                 widths[col] = width
     return widths

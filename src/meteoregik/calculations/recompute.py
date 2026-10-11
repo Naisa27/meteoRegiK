@@ -2,11 +2,17 @@
 через интерфейс — только затронутый диапазон (день -> декада -> месяц -> год)
 для конкретной станции.
 
+Параметров два (корректировка 2026-10-11): температура ("T": avg/min/max) и
+осадки ("R": sum, calculations/precipitation.py). Порядок пересчёта у них
+общий, различается только то, как считается день и как дни складываются в
+период, — это описано в _STAT_TYPES и _PERIOD_STATS, остальной код параметра
+не знает.
+
 Декада/месяц/год пересчитываются целиком по своим границам (не только по
 затронутой части [start, end]) — см. calculations/temperature.py. В отличие
 от дней (которые всегда считаются заново из rp5_readings/gg_readings),
 декада/месяц/год строятся поверх уже сохранённых в computed_indicators
-значений дней (_aggregate_from_stored) — так выбор пользователя при
+значений дней (_stored_days) — так выбор пользователя при
 конфликте на уровне дня корректно поднимается вверх по иерархии периодов.
 
 Разрешение конфликтов: если пересчитанное значение отличается от уже
@@ -30,10 +36,11 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations.anomalies import mark_stale
+from meteoregik.calculations import precipitation
 from meteoregik.calculations.temperature import Stats, daily_stats, decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings
 
-PARAMETER = "T"
+PARAMETER_TEMPERATURE = "T"
 _EPSILON = 1e-6
 
 ConflictChoice = Literal["old", "new"]
@@ -48,11 +55,12 @@ class ValueConflict:
     period_type: str  # 'day' | 'decade' | 'month' | 'year'
     period_start: date
     period_end: date
-    stat_type: str  # 'avg' | 'min' | 'max'
+    stat_type: str  # 'avg' | 'min' | 'max' | 'sum'
     old_value: float
     old_source_file: str | None
     new_value: float
     new_source_file: str | None
+    parameter: str = PARAMETER_TEMPERATURE  # 'T' | 'R'
 
 
 ConflictResolver = Callable[[ValueConflict], ConflictChoice]
@@ -77,7 +85,7 @@ def _source_file_for_day(engine: Engine, wmo_index: int, day: date) -> str | Non
 
 
 def _existing_stats(
-    conn: Connection, wmo_index: int, period_type: str, period_start: date, period_end: date
+    conn: Connection, wmo_index: int, parameter: str, period_type: str, period_start: date, period_end: date
 ) -> dict[str, dict[str, object]]:
     rows = conn.execute(
         select(
@@ -89,7 +97,10 @@ def _existing_stats(
             computed_indicators.c.period_type == period_type,
             computed_indicators.c.period_start == period_start,
             computed_indicators.c.period_end == period_end,
-            computed_indicators.c.parameter == PARAMETER,
+            computed_indicators.c.parameter == parameter,
+            # Отклонение от нормы (stat_type='anomaly') лежит в той же
+            # таблице, но пересчёту не принадлежит — calculations/anomalies.py
+            computed_indicators.c.stat_type.in_(_STAT_TYPES[parameter]),
         )
     ).all()
     return {row.stat_type: {"value": row.value, "source_file": row.source_file} for row in rows}
@@ -98,6 +109,7 @@ def _existing_stats(
 def _write(
     conn: Connection,
     wmo_index: int,
+    parameter: str,
     period_type: str,
     period_start: date,
     period_end: date,
@@ -110,7 +122,7 @@ def _write(
         period_type=period_type,
         period_start=period_start,
         period_end=period_end,
-        parameter=PARAMETER,
+        parameter=parameter,
         stat_type=stat_type,
         value=value,
         source_file=source_file,
@@ -130,7 +142,13 @@ def _write(
 
 
 def _delete_stat(
-    conn: Connection, wmo_index: int, period_type: str, period_start: date, period_end: date, stat_type: str
+    conn: Connection,
+    wmo_index: int,
+    parameter: str,
+    period_type: str,
+    period_start: date,
+    period_end: date,
+    stat_type: str,
 ) -> None:
     conn.execute(
         delete(computed_indicators).where(
@@ -138,7 +156,7 @@ def _delete_stat(
             computed_indicators.c.period_type == period_type,
             computed_indicators.c.period_start == period_start,
             computed_indicators.c.period_end == period_end,
-            computed_indicators.c.parameter == PARAMETER,
+            computed_indicators.c.parameter == parameter,
             computed_indicators.c.stat_type == stat_type,
         )
     )
@@ -147,6 +165,7 @@ def _delete_stat(
 def _resolve_and_store(
     engine: Engine,
     wmo_index: int,
+    parameter: str,
     period_type: str,
     period_start: date,
     period_end: date,
@@ -155,9 +174,14 @@ def _resolve_and_store(
     conflict_resolver: ConflictResolver | None,
 ) -> None:
     with engine.begin() as conn:
-        existing = _existing_stats(conn, wmo_index, period_type, period_start, period_end)
+        existing = _existing_stats(conn, wmo_index, parameter, period_type, period_start, period_end)
 
-        for stat_type in ("avg", "min", "max"):
+        def write(stat_type: str, value: float) -> None:
+            _write(
+                conn, wmo_index, parameter, period_type, period_start, period_end, stat_type, value, new_source_file
+            )
+
+        for stat_type in _STAT_TYPES[parameter]:
             new_value = stats[stat_type]
             old = existing.get(stat_type)
             old_value = old["value"] if old else None
@@ -171,11 +195,11 @@ def _resolve_and_store(
                     # осиротевшим и должно исчезнуть вместе с данными
                     # (например, пользователь удалил единственную запись за
                     # день через "Просмотр данных").
-                    _delete_stat(conn, wmo_index, period_type, period_start, period_end, stat_type)
+                    _delete_stat(conn, wmo_index, parameter, period_type, period_start, period_end, stat_type)
                 continue
 
             if old is None or old_value is None or abs(old_value - new_value) <= _EPSILON:
-                _write(conn, wmo_index, period_type, period_start, period_end, stat_type, new_value, new_source_file)
+                write(stat_type, new_value)
                 continue
 
             choice: ConflictChoice = "new"
@@ -190,17 +214,20 @@ def _resolve_and_store(
                     old_source_file=old["source_file"],
                     new_value=new_value,
                     new_source_file=new_source_file,
+                    parameter=parameter,
                 )
                 choice = conflict_resolver(conflict)
 
             if choice == "new":
-                _write(conn, wmo_index, period_type, period_start, period_end, stat_type, new_value, new_source_file)
+                write(stat_type, new_value)
             # choice == "old" — сохранённое значение оставляем как есть
 
 
-def _aggregate_from_stored(engine: Engine, wmo_index: int, start: date, end: date) -> Stats:
-    """avg/min/max за период поверх уже сохранённых в computed_indicators
-    дневных значений (а не пересчётом заново из сырых данных) — чтобы выбор
+def _stored_days(
+    engine: Engine, wmo_index: int, parameter: str, start: date, end: date
+) -> dict[str, list[float]]:
+    """Сохранённые суточные значения периода по видам статистики. Период
+    строится поверх них, а не пересчётом из сырых данных, — чтобы выбор
     пользователя при конфликте на уровне дня учитывался в декаде/месяце/году."""
     with engine.connect() as conn:
         rows = conn.execute(
@@ -209,18 +236,38 @@ def _aggregate_from_stored(engine: Engine, wmo_index: int, start: date, end: dat
                 computed_indicators.c.period_type == "day",
                 computed_indicators.c.period_start >= start,
                 computed_indicators.c.period_start <= end,
-                computed_indicators.c.parameter == PARAMETER,
+                computed_indicators.c.parameter == parameter,
+                computed_indicators.c.value.is_not(None),
             )
         ).all()
+    values: dict[str, list[float]] = {}
+    for stat_type, value in rows:
+        values.setdefault(stat_type, []).append(value)
+    return values
 
-    avgs = [row.value for row in rows if row.stat_type == "avg" and row.value is not None]
-    mins = [row.value for row in rows if row.stat_type == "min" and row.value is not None]
-    maxs = [row.value for row in rows if row.stat_type == "max" and row.value is not None]
+
+def _temperature_period(days: dict[str, list[float]]) -> Stats:
+    avgs, mins, maxs = days.get("avg", []), days.get("min", []), days.get("max", [])
     return {
         "avg": round(sum(avgs) / len(avgs), 2) if avgs else None,
         "min": min(mins) if mins else None,
         "max": max(maxs) if maxs else None,
     }
+
+
+def _precipitation_period(days: dict[str, list[float]]) -> Stats:
+    return {precipitation.STAT_SUM: precipitation.aggregate(days.get(precipitation.STAT_SUM, []))}
+
+
+# Виды статистики параметра и то, как суточные значения складываются в период
+_STAT_TYPES: dict[str, tuple[str, ...]] = {
+    PARAMETER_TEMPERATURE: ("avg", "min", "max"),
+    precipitation.PARAMETER: (precipitation.STAT_SUM,),
+}
+_PERIOD_STATS: dict[str, Callable[[dict[str, list[float]]], Stats]] = {
+    PARAMETER_TEMPERATURE: _temperature_period,
+    precipitation.PARAMETER: _precipitation_period,
+}
 
 
 def _decades_in_range(start: date, end: date) -> list[tuple[date, date]]:
@@ -264,28 +311,37 @@ def recompute_range(
     останется со старыми отклонениями при новых суточных значениях."""
     with engine.begin() as conn:
         mark_stale(conn, wmo_index)
+        # Основной ряд сроков осадков — один на станцию и на весь пересчёт
+        main_series = precipitation.main_series(conn, wmo_index)
     day = start
     while day <= end:
         stats = daily_stats(engine, wmo_index, day)
         source_file = None
         if any(v is not None for v in stats.values()):
             source_file = _source_file_for_day(engine, wmo_index, day)
-        _resolve_and_store(engine, wmo_index, "day", day, day, stats, source_file, conflict_resolver)
+        day_sum, sum_source = precipitation.daily_sum(engine, wmo_index, day, main_series)
+        # У каждого параметра свой источник: осадки дня могут быть из rp5 при
+        # температуре из ГГ (в ГГ осадки за этот день пусты)
+        for parameter, values, source in (
+            (PARAMETER_TEMPERATURE, stats, source_file),
+            (precipitation.PARAMETER, {precipitation.STAT_SUM: day_sum}, sum_source),
+        ):
+            _resolve_and_store(engine, wmo_index, parameter, "day", day, day, values, source, conflict_resolver)
         if progress_callback is not None:
             progress_callback(day)
         day += timedelta(days=1)
 
-    for decade_start, decade_end in _decades_in_range(start, end):
-        stats = _aggregate_from_stored(engine, wmo_index, decade_start, decade_end)
-        _resolve_and_store(engine, wmo_index, "decade", decade_start, decade_end, stats, None, conflict_resolver)
-
-    for year, month in _months_in_range(start, end):
-        month_start = date(year, month, 1)
-        month_end = date(year, month, monthrange(year, month)[1])
-        stats = _aggregate_from_stored(engine, wmo_index, month_start, month_end)
-        _resolve_and_store(engine, wmo_index, "month", month_start, month_end, stats, None, conflict_resolver)
-
-    for year in range(start.year, end.year + 1):
-        year_start, year_end = date(year, 1, 1), date(year, 12, 31)
-        stats = _aggregate_from_stored(engine, wmo_index, year_start, year_end)
-        _resolve_and_store(engine, wmo_index, "year", year_start, year_end, stats, None, conflict_resolver)
+    periods: list[tuple[str, date, date]] = [
+        ("decade", decade_start, decade_end) for decade_start, decade_end in _decades_in_range(start, end)
+    ]
+    periods += [
+        ("month", date(year, month, 1), date(year, month, monthrange(year, month)[1]))
+        for year, month in _months_in_range(start, end)
+    ]
+    periods += [("year", date(year, 1, 1), date(year, 12, 31)) for year in range(start.year, end.year + 1)]
+    for period_type, period_start, period_end in periods:
+        for parameter, period_stats in _PERIOD_STATS.items():
+            stats = period_stats(_stored_days(engine, wmo_index, parameter, period_start, period_end))
+            _resolve_and_store(
+                engine, wmo_index, parameter, period_type, period_start, period_end, stats, None, conflict_resolver
+            )
