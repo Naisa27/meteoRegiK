@@ -323,9 +323,11 @@ def test_tabs_scroll_instead_of_growing_the_window(engine):
     dialog.tabs.setCurrentWidget(dialog.source_tab)
 
     assert dialog.minimumSizeHint().height() < 450
-    for content in (dialog._stack, dialog.source_tab._stack):
-        area = content.parentWidget().parentWidget()
-        assert isinstance(area, QScrollArea) and area.widgetResizable()
+    # Прокручивается страница результатов; подсказка — вне области прокрутки,
+    # иначе она встаёт по центру высокой страницы и уезжает за край окна
+    for tab in (dialog, dialog.source_tab):
+        assert isinstance(tab._content, QScrollArea) and tab._content.widgetResizable()
+        assert not isinstance(tab._hint.parentWidget().parentWidget(), QScrollArea)
 
 
 def test_mouse_wheel_over_chart_is_left_to_the_scroll_area(engine):

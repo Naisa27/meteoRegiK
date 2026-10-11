@@ -25,6 +25,7 @@ from meteoregik.reports.dashboard_data import (
 )
 from meteoregik.ui.dashboard_charts import HEATMAP_ANOMALY, HEATMAP_VALUE, heat_cell_tooltip
 from meteoregik.ui.dashboard_view import DashboardDialog, anomaly_note, card_texts
+from meteoregik.ui.empty_state import NO_DATA_HINT
 
 WMO_INDEX = 27704
 
@@ -341,3 +342,22 @@ def test_help_badge_shows_calculation_tooltip(tmp_path, messages):
     assert badge.text() == "?"
     assert "Самая высокая температура за выбранный период" in badge.toolTip()
     assert badge.accessibleName() == "Как считается: Абсолютный максимум за период"
+
+
+def test_empty_database_shows_no_data_hint_instead_of_start_hint(tmp_path):
+    """Станций с данными нет — подсказка "выберите станцию" вела бы в тупик."""
+    _qapp()
+    engine = get_engine(tmp_path / "empty.sqlite3")
+    run_migrations(engine)
+
+    dialog = DashboardDialog(engine, run_async=False)
+
+    assert dialog._stack.currentWidget() is dialog._hint
+    assert dialog._hint.text() == NO_DATA_HINT
+
+
+def test_database_with_data_keeps_start_hint(tmp_path):
+    _qapp()
+    dialog = DashboardDialog(_make_engine(tmp_path), run_async=False)
+
+    assert "Выберите метеостанцию" in dialog._hint.text()

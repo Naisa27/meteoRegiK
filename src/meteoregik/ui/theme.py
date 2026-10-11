@@ -241,6 +241,10 @@ QFrame#card {{
     border: 1px solid {BORDER};
     border-radius: 10px;
 }}
+QLabel#emptyHint {{
+    color: {TEXT_SECONDARY};
+    font-size: 14px;
+}}
 QLineEdit, QComboBox {{
     border: 1px solid {BORDER};
     border-radius: 6px;

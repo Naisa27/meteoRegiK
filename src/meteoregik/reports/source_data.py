@@ -373,6 +373,16 @@ def _loaded_files(conn, table: Table, fmt: str, labels: Mapping[int, str]) -> li
     ]
 
 
+def has_loaded_readings(engine: Engine) -> bool:
+    """Есть ли в базе хоть одна строка исходных данных (rp5 или ГГ). Дешёвая
+    проверка для подсказки "в базе пока нет данных" — без сбора всей сводки."""
+    with engine.connect() as conn:
+        return any(
+            conn.execute(select(table.c.id).limit(1)).first() is not None
+            for table in (rp5_readings, gg_readings)
+        )
+
+
 def fetch_source_overview(engine: Engine) -> SourceOverview:
     """Сводка по всей базе — по одному проходу на таблицу (GROUP BY станция)."""
     labels = _station_labels(engine)

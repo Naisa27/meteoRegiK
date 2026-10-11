@@ -88,6 +88,7 @@ from meteoregik.ui.dashboard_widgets import (
 )
 from meteoregik.ui.date_field import DateField, DateFieldError
 from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
+from meteoregik.ui.empty_state import NO_DATA_HINT, hint_label
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
@@ -119,7 +120,6 @@ QFrame#heatmapMode {{
 QFrame#heatmapMode QRadioButton {{ color: {HEATMAP_MODE_TEXT}; font-weight: 600; }}
 QLabel#chartTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
 QLabel#chartNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
-QLabel#emptyHint {{ color: {theme.TEXT_SECONDARY}; font-size: 14px; }}
 QToolButton#helpBadge {{
     color: {theme.TEXT_SECONDARY};
     background: {theme.INPUT_BG};
@@ -523,7 +523,11 @@ class DashboardDialog(QDialog):
             self.resize(1100, 750)
         self.setStyleSheet(theme.DIALOG_QSS + DASHBOARD_QSS)
         self._build_ui()
-        self.station_combo.set_choices(load_stations_with_computed_indicators(self.engine))
+        choices = load_stations_with_computed_indicators(self.engine)
+        self.station_combo.set_choices(choices)
+        if not choices:
+            # Выбирать не из чего — подсказка "выберите станцию" вела бы в тупик
+            self._hint.setText(NO_DATA_HINT)
         if wmo_index is not None:
             self.station_combo.select_wmo(wmo_index)
             self._apply_filters()
@@ -572,18 +576,18 @@ class DashboardDialog(QDialog):
 
         # До первого "Применить" — подсказка, что делать, а не пустые карточки.
         self._stack = QStackedWidget()
-        self._hint = QLabel(_START_HINT)
-        self._hint.setObjectName("emptyHint")
-        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setWordWrap(True)
+        self._hint = hint_label(_START_HINT)
         self._stack.addWidget(self._hint)
-        self._content = self._build_content()
+        # Прокручивается только страница результатов, а не вся стопка: стопка
+        # требует места под самую высокую страницу, и подсказка по её центру
+        # уезжала вниз, а в невысоком окне — за край (скриншот 2026-10-11).
+        self._content = scrollable(self._build_content())
         self._stack.addWidget(self._content)
 
         results_area = QWidget()
         results_layout = QGridLayout(results_area)
         results_layout.setContentsMargins(0, 0, 0, 0)
-        results_layout.addWidget(scrollable(self._stack), 0, 0)
+        results_layout.addWidget(self._stack, 0, 0)
         self.loading_overlay = LoadingOverlay("Считаем показатели…")
         results_layout.addWidget(self.loading_overlay, 0, 0)
         layout.addWidget(results_area, stretch=1)

@@ -9,11 +9,16 @@
 станция с чужими данными. Теперь импорт останавливается до записи в базу и
 отправляет пользователя проверить индекс или добавить станцию в
 "Справочниках" со всеми сведениями.
+
+Если в файле есть и название станции (rp5), оно сверяется с названием в
+справочнике — confirm_station_name: при расхождении загрузку по индексу
+подтверждает пользователь.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.engine import Connection
@@ -72,3 +77,70 @@ def require_stations(
     if missing:
         raise StationNotFoundError(missing, index_location=index_location, name_from_file=name_from_file)
     return found
+
+
+def names_match(first: str, second: str) -> bool:
+    """Одно ли это название. Регистр, "ё"/"е" и лишние пробелы различием не
+    считаются: это разница набора, а не другая станция. Всё остальное —
+    "Москва" и "Москва (ВДНХ)" — различие: решать, одна ли это станция,
+    должен пользователь, а не программа."""
+
+    def normalized(name: str) -> str:
+        return " ".join(name.casefold().replace("ё", "е").split())
+
+    return normalized(first) == normalized(second)
+
+
+@dataclass(frozen=True)
+class StationNameMismatch:
+    """Индекс ВМО из файла найден в справочнике, но станция там названа
+    иначе, чем в файле."""
+
+    wmo_index: int
+    name_in_file: str
+    name_in_directory: str
+
+    @property
+    def description(self) -> str:
+        """Что именно не сошлось — общее начало вопроса пользователю и
+        текста ошибки."""
+        return (
+            f"В файле станция названа «{self.name_in_file}», а в справочнике под индексом ВМО "
+            f"{self.wmo_index} записана станция «{self.name_in_directory}»."
+        )
+
+
+class StationNameMismatchError(LookupError):
+    """Название станции в файле не совпало со справочником, и загрузку по
+    индексу никто не подтвердил. Текст — готовое сообщение пользователю."""
+
+    def __init__(self, mismatch: StationNameMismatch, *, index_location: str) -> None:
+        self.mismatch = mismatch
+        super().__init__(
+            f"{mismatch.description} Файл не загружен.\n\n"
+            f"Проверьте индекс и название станции {index_location}: возможно, в файле опечатка "
+            "или это файл другой станции."
+        )
+
+
+def confirm_station_name(
+    name_in_file: str,
+    name_in_directory: str | None,
+    wmo_index: int,
+    *,
+    index_location: str,
+    confirm: Callable[[StationNameMismatch], bool] | None,
+) -> None:
+    """Сверка названия из файла с названием станции в справочнике
+    (корректировка 2026-10-11): привязка идёт по индексу, и опечатка в
+    индексе, попавшая на чужую существующую станцию, иначе молча записала бы
+    ей чужие данные. При расхождении спрашивается confirm — загружать ли по
+    индексу; отказ или отсутствие confirm (вызов не из окна импорта) —
+    StationNameMismatchError: без явного согласия данные не пишутся.
+
+    Станция без названия в справочнике не сверяется — сравнивать не с чем."""
+    if not name_in_directory or names_match(name_in_file, name_in_directory):
+        return
+    mismatch = StationNameMismatch(wmo_index, name_in_file, name_in_directory)
+    if confirm is None or not confirm(mismatch):
+        raise StationNameMismatchError(mismatch, index_location=index_location)

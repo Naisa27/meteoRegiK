@@ -14,6 +14,7 @@ from meteoregik.db.schema import gg_readings, rp5_readings, ru_regions, stations
 from meteoregik.db.session import get_engine
 from meteoregik.preferences import Preferences
 from meteoregik.ui import data_browser
+from meteoregik.ui.empty_state import NO_DATA_HINT
 from meteoregik.ui.data_browser import (
     GG_SPEC,
     RP5_COLUMNS,
@@ -581,3 +582,67 @@ def test_window_has_minimize_and_maximize_buttons(tmp_path):
     flags = dialog.windowFlags()
     assert flags & Qt.WindowType.WindowMinMaxButtonsHint == Qt.WindowType.WindowMinMaxButtonsHint
     assert flags & Qt.WindowType.WindowCloseButtonHint
+
+
+# --- подсказка "в базе пока нет данных" ---
+
+
+def _empty_engine(tmp_path):
+    engine = get_engine(tmp_path / "empty.sqlite3")
+    run_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(stations.insert().values(name="Мосальск", wmo_index=WMO_INDEX))
+    return engine
+
+
+def test_empty_database_shows_no_data_hint_instead_of_table(tmp_path):
+    _qapp()
+    dialog = DataBrowserDialog(_empty_engine(tmp_path), preferences=Preferences(None))
+
+    assert dialog._stack.currentWidget() is dialog._no_data_hint
+    assert dialog._no_data_hint.text() == NO_DATA_HINT
+    assert dialog.add_btn.isEnabled()  # первую строку можно добавить и вручную
+
+
+def test_no_data_hint_is_not_shown_when_only_the_selected_format_is_empty(tmp_path):
+    """В базе есть только ГГ, а открыт rp5: база не пуста — подсказка была бы неправдой."""
+    _qapp()
+    engine = _empty_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(gg_readings.insert().values(wmo_index=WMO_INDEX, obs_date=date(2020, 1, 1), t_avg=1.0))
+
+    dialog = DataBrowserDialog(engine, preferences=Preferences(None))
+
+    assert dialog.rp5_radio.isChecked()
+    assert dialog._stack.currentWidget() is dialog.table
+
+
+def test_database_with_data_shows_table(tmp_path):
+    _engine, dialog = _dialog(tmp_path)
+
+    assert dialog._stack.currentWidget() is dialog.table
+
+
+def test_no_data_hint_disappears_after_first_row_is_added(tmp_path, messages, monkeypatch):
+    _qapp()
+    engine = _empty_engine(tmp_path)
+    dialog = DataBrowserDialog(engine, preferences=Preferences(None))
+
+    class _FakeAddDialog:
+        def __init__(self, *args, **kwargs):
+            self.result_values = {
+                "wmo_index": WMO_INDEX, "station_name": "Мосальск", "obs_date": date(2020, 1, 1),
+                "obs_time": time(9, 0), "source_file": "ручной ввод",
+            }
+
+        def setWindowModality(self, modality):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(data_browser, "_AddRowDialog", _FakeAddDialog)
+
+    dialog.add_btn.click()
+
+    assert dialog._stack.currentWidget() is dialog.table

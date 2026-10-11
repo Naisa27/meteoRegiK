@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QStackedWidget,
     QTableView,
     QVBoxLayout,
 )
@@ -65,7 +66,9 @@ from meteoregik.preferences import Preferences
 from meteoregik.stations.choices import StationChoice, load_directory_stations, load_stations_in_table
 from meteoregik.ui import theme
 from meteoregik.ui.date_field import DateField, DateFieldError
+from meteoregik.reports.source_data import has_loaded_readings
 from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons, exec_window_modal
+from meteoregik.ui.empty_state import NO_DATA_HINT, hint_label
 from meteoregik.ui.station_combo import ALL_STATIONS_TEXT, StationCombo
 
 PAGE_SIZE = 100
@@ -615,6 +618,7 @@ class DataBrowserDialog(QDialog):
         )
         self._build_ui()
         self._reload_station_choices()
+        self._refresh_empty_state()
         self._refresh_fields_label()
         self._refresh_status()
 
@@ -654,7 +658,14 @@ class DataBrowserDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        layout.addWidget(self.table, stretch=1)
+        # Пока в базе нет исходных данных, на месте таблицы — подсказка, откуда
+        # им взяться (см. _refresh_empty_state); кнопки под ней остаются:
+        # первую строку можно добавить и вручную.
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self.table)
+        self._no_data_hint = hint_label(NO_DATA_HINT)
+        self._stack.addWidget(self._no_data_hint)
+        layout.addWidget(self._stack, stretch=1)
 
         toolbar = QHBoxLayout()
         self.add_btn = QPushButton("Добавить строку")
@@ -756,6 +767,13 @@ class DataBrowserDialog(QDialog):
     def _reload_station_choices(self) -> None:
         """Станции, реально присутствующие в таблице выбранного формата."""
         self.station_combo.set_choices(load_stations_in_table(self.engine, self._spec.table))
+
+    def _refresh_empty_state(self) -> None:
+        """Подсказка вместо таблицы — только когда исходных данных нет ни в
+        одном формате: если пуст лишь выбранный формат, база не пуста, и
+        текст "в базе пока нет данных" был бы неправдой."""
+        empty = not has_loaded_readings(self.engine)
+        self._stack.setCurrentWidget(self._no_data_hint if empty else self.table)
 
     def _refresh_fields_label(self) -> None:
         total = len(self._spec.optional_fields())
@@ -871,6 +889,7 @@ class DataBrowserDialog(QDialog):
             QMessageBox.warning(self, "Новая строка", "Запись с такими ключевыми полями уже существует.")
             return
         self._reload_station_choices()  # в таблице могла появиться новая станция
+        self._refresh_empty_state()  # первая строка в пустой базе — подсказка больше не нужна
         self._refresh_status()
         if not self._model.loaded:
             QMessageBox.information(
@@ -888,4 +907,5 @@ class DataBrowserDialog(QDialog):
         ):
             return
         self._model.delete_row(selected[0].row())
+        self._refresh_empty_state()  # удалённая строка могла быть последней в базе
         self._refresh_status()

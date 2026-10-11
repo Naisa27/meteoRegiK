@@ -1,13 +1,21 @@
 from datetime import date
 
 from openpyxl import Workbook
+from sqlalchemy import select
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from meteoregik.calculations.recompute import ValueConflict
 from meteoregik.db.migrations import run_migrations
 from meteoregik.db.session import get_engine
 from meteoregik.importers.base import ImportReport
-from meteoregik.ui.import_dialog import ImportDialog, format_conflict_message, format_import_report
+from meteoregik.db.schema import rp5_readings, stations
+from meteoregik.stations.matching import StationNameMismatch
+from meteoregik.ui.import_dialog import (
+    ImportDialog,
+    format_conflict_message,
+    format_import_report,
+    format_name_mismatch_question,
+)
 
 
 def _qapp():
@@ -229,6 +237,81 @@ def test_run_import_refuses_file_of_station_missing_in_directory(tmp_path, monke
     assert dialog.success_label.text() == ""
     assert dialog.report_label.text() == ""
     assert dialog.import_btn.isEnabled()
+
+
+def test_format_name_mismatch_question_names_both_stations_and_the_index():
+    text = format_name_mismatch_question(StationNameMismatch(27707, "Мосальск", "Сухиничи"))
+
+    assert "«Мосальск»" in text and "«Сухиничи»" in text and "27707" in text
+    assert "записаны станции «Сухиничи»" in text
+
+
+def _dialog_with_mismatching_rp5_file(tmp_path):
+    """В справочнике под индексом 27707 — Сухиничи, а файл подписан Мосальском."""
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(stations.insert().values(name="Сухиничи", wmo_index=27707))
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["# Метеостанция Мосальск, Россия, WMO_ID=27707, выборка с 01.01.2020 по 31.12.2020, все дни"])
+    ws.append(["#"])
+    ws.append(["Местное время в Мосальске", "T"])
+    ws.append(["01.01.2020 09:00", -1.2])
+    file_path = str(tmp_path / "rp5.xlsx")
+    wb.save(file_path)
+
+    dialog = ImportDialog(engine)
+    dialog.file_edit.setText(file_path)
+    dialog.rp5_radio.setChecked(True)
+    return engine, dialog
+
+
+def _rp5_row_count(engine) -> int:
+    with engine.connect() as conn:
+        return len(conn.execute(select(rp5_readings.c.id)).all())
+
+
+def test_run_import_asks_about_station_name_and_does_not_load_on_refusal(tmp_path, monkeypatch):
+    _qapp()
+    engine, dialog = _dialog_with_mismatching_rp5_file(tmp_path)
+    shown = []
+
+    def fake_exec(self):
+        shown.append((self.windowTitle(), self.text(), self.defaultButton().text()))
+        _click_button_containing(self, "Не загружать")
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+
+    dialog._run_import()
+
+    assert len(shown) == 1
+    title, text, default_button = shown[0]
+    assert title == "Название станции не совпадает"
+    assert "«Мосальск»" in text and "«Сухиничи»" in text
+    assert default_button == "Не загружать"  # Enter не заливает данные чужой станции
+    assert _rp5_row_count(engine) == 0
+    assert dialog.status_label.text() == "Файл не загружен"
+    assert dialog.success_label.text() == ""
+    assert dialog.import_btn.isEnabled()
+
+
+def test_run_import_loads_file_by_index_after_confirmation(tmp_path, monkeypatch):
+    _qapp()
+    engine, dialog = _dialog_with_mismatching_rp5_file(tmp_path)
+
+    def fake_exec(self):
+        _click_button_containing(self, "Загрузить по индексу")
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+
+    dialog._run_import()
+
+    assert _rp5_row_count(engine) == 1
+    assert dialog.success_label.text() == "Импорт завершён успешно"
+    assert "Станция: Сухиничи" in dialog.report_label.text()
 
 
 def test_import_dialog_buttons_have_rounded_corners():

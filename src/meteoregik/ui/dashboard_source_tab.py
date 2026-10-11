@@ -67,13 +67,10 @@ from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.dashboard_source_charts import FillCalendar, ObsHoursChart, ParameterFillChart
 from meteoregik.ui.dashboard_widgets import CardText, GrooveDivider, StatCard, format_count, format_day, mode_switch, scrollable
+from meteoregik.ui.empty_state import NO_DATA_HINT, hint_label
 from meteoregik.ui.loading_overlay import LoadingOverlay
 
 _NO_VALUE = "—"
-_EMPTY_HINT = (
-    "В базе пока нет залитых данных.\n"
-    "Загрузите файлы rp5 или ГГ через «Импорт данных» на главном экране."
-)
 _SORT_ROLE = Qt.ItemDataRole.UserRole
 # Строк основной таблицы видно без прокрутки: станций обычно немного, а
 # место под таблицей нужнее подробностям выбранной станции.
@@ -470,14 +467,14 @@ class SourceDataTab(QWidget):
         outer = QGridLayout(self)
         outer.setContentsMargins(0, 10, 0, 0)
         self._stack = QStackedWidget()
-        self._hint = QLabel(_EMPTY_HINT)
-        self._hint.setObjectName("emptyHint")
-        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setWordWrap(True)
+        self._hint = hint_label(NO_DATA_HINT)
         self._stack.addWidget(self._hint)
-        self._content = self._build_content()
+        # Прокручивается только страница результатов, а не вся стопка: стопка
+        # требует места под самую высокую страницу, и подсказка по её центру
+        # уезжала вниз, а в невысоком окне — за край (скриншот 2026-10-11).
+        self._content = scrollable(self._build_content())
         self._stack.addWidget(self._content)
-        outer.addWidget(scrollable(self._stack), 0, 0)
+        outer.addWidget(self._stack, 0, 0)
         self.loading_overlay = LoadingOverlay("Собираем сведения о данных…")
         outer.addWidget(self.loading_overlay, 0, 0)
 

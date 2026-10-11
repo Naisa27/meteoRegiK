@@ -78,6 +78,7 @@ from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.date_field import DateField, DateFieldError
 from meteoregik.ui.dialogs import enable_min_max_buttons, exec_window_modal, minimize_owner_instead
+from meteoregik.ui.empty_state import NO_DATA_HINT, hint_label
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
@@ -315,6 +316,10 @@ class AggregateViewDialog(QDialog):
         self._stack.addWidget(self.table)
         self.chart_view = AggregateChartView()
         self._stack.addWidget(self.chart_view)
+        # Показывается вместо пустой таблицы, пока в базе нет данных (см.
+        # _reload_station_choices); результат выборки её сменяет.
+        self._no_data_hint = hint_label(NO_DATA_HINT)
+        self._stack.addWidget(self._no_data_hint)
         # Лоадер в той же ячейке сетки, что и результат, — поверх него.
         results_area = QWidget()
         results_layout = QGridLayout(results_area)
@@ -426,7 +431,11 @@ class AggregateViewDialog(QDialog):
     # --- станции / настройки ---
 
     def _reload_station_choices(self) -> None:
-        self.station_combo.set_choices(load_stations_with_computed_indicators(self.engine))
+        choices = load_stations_with_computed_indicators(self.engine)
+        self.station_combo.set_choices(choices)
+        if not choices:
+            # Выбирать не из чего: пустая таблица без объяснений выглядела бы поломкой
+            self._stack.setCurrentWidget(self._no_data_hint)
 
     def _output_mode(self) -> OutputMode:
         if self.monthly_radio.isChecked():

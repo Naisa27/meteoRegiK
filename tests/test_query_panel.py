@@ -17,6 +17,7 @@ from meteoregik.db.session import get_engine
 from meteoregik.preferences import Preferences
 from meteoregik.reports.parameters import PARAMETER_LABELS
 from meteoregik.ui.query_panel import AggregateViewDialog, _ParametersDialog, suggest_export_filename
+from meteoregik.ui.empty_state import NO_DATA_HINT
 
 WMO_INDEX = 27704
 
@@ -614,3 +615,24 @@ def test_background_loading_delivers_last_request_in_gui_thread(tmp_path, monkey
     assert _cols(dialog) == 14  # помесячно
     assert dialog.export_btn.isEnabled()
     QThreadPool.globalInstance().waitForDone()
+
+
+def test_empty_database_shows_no_data_hint(tmp_path):
+    _qapp()
+    engine = get_engine(tmp_path / "empty.sqlite3")
+    run_migrations(engine)
+
+    dialog = AggregateViewDialog(engine, preferences=Preferences(None), run_async=False)
+
+    assert dialog._stack.currentWidget() is dialog._no_data_hint
+    assert dialog._no_data_hint.text() == NO_DATA_HINT
+
+
+def test_database_with_data_opens_without_no_data_hint_and_shows_results(tmp_path):
+    _engine, dialog = _dialog(tmp_path)
+    assert dialog._stack.currentWidget() is not dialog._no_data_hint
+
+    _select_station(dialog)
+    dialog.apply_btn.click()
+
+    assert dialog._stack.currentWidget() is dialog.table

@@ -23,7 +23,12 @@ progress_callback(day) на каждый обработанный день.
 Если станции из файла нет в справочнике, импортёр бросает
 StationNotFoundError (stations/matching.py) — файл не загружается, а
 сообщение отправляет проверить индекс или добавить станцию в "Справочниках"
-(решение пользователя 2026-10-11: импорт станции не создаёт)."""
+(решение пользователя 2026-10-11: импорт станции не создаёт).
+
+Если станция rp5-файла в справочнике названа иначе, чем в файле, импортёр
+спрашивает через _confirm_name_mismatch, загружать ли файл по индексу
+(корректировка 2026-10-11). Отказ — StationNameMismatchError: файл не
+загружен, второго окна об этом нет — пользователь только что сам так решил."""
 
 from __future__ import annotations
 
@@ -52,10 +57,15 @@ from meteoregik.calculations.recompute import ConflictChoice, ValueConflict, rec
 from meteoregik.importers.base import ImportFormatError, ImportReport
 from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.importers.rp5_importer import Rp5Importer
-from meteoregik.stations.matching import StationNotFoundError
+from meteoregik.stations.matching import StationNameMismatch, StationNameMismatchError, StationNotFoundError
 from meteoregik.ui import theme
+from meteoregik.ui.buttons import reserve_focus_width
 
 STATION_NOT_FOUND_TITLE = "Станции нет в справочнике"
+NAME_MISMATCH_TITLE = "Название станции не совпадает"
+LOAD_BY_INDEX_TEXT = "Загрузить по индексу"
+DO_NOT_LOAD_TEXT = "Не загружать"
+NOT_LOADED_STATUS = "Файл не загружен"
 REPORT_LINES = 6  # строк в тексте format_import_report (у ГГ; у rp5 на одну меньше)
 
 _PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "месяц", "year": "год"}
@@ -79,6 +89,18 @@ def format_conflict_message(conflict: ValueConflict) -> str:
         f"Сохранено (из файла «{old_source}»): {conflict.old_value}\n"
         f"Рассчитано сейчас (из файла «{new_source}»): {conflict.new_value}\n\n"
         "Какое значение оставить?"
+    )
+
+
+def format_name_mismatch_question(mismatch: StationNameMismatch) -> str:
+    """Текст вопроса о расхождении названия станции — вынесено из
+    ImportDialog, чтобы тестировать без QApplication."""
+    return (
+        f"{mismatch.description}\n\n"
+        f"Если это одна и та же станция, загрузите файл по индексу: данные будут записаны "
+        f"станции «{mismatch.name_in_directory}».\n\n"
+        "Если станции разные, не загружайте файл: исправьте в нём индекс или название и "
+        "повторите импорт."
     )
 
 
@@ -220,7 +242,7 @@ class ImportDialog(QDialog):
 
         try:
             if self.rp5_radio.isChecked():
-                importer = Rp5Importer(self.engine)
+                importer = Rp5Importer(self.engine, confirm_name_mismatch=self._confirm_name_mismatch)
             else:
                 importer = GgImporter(self.engine)
             report = importer.import_file(file_path)
@@ -236,6 +258,10 @@ class ImportDialog(QDialog):
             self.status_label.setText("")
             QMessageBox.warning(self, STATION_NOT_FOUND_TITLE, str(exc))
             return
+        except StationNameMismatchError:
+            # Отказ в _confirm_name_mismatch: окно с вопросом уже было, второе не нужно
+            self.status_label.setText(NOT_LOADED_STATUS)
+            return
         except Exception as exc:  # noqa: BLE001 — показываем пользователю любую ошибку импорта
             self.status_label.setText("")
             QMessageBox.critical(self, "Ошибка импорта", str(exc))
@@ -248,6 +274,23 @@ class ImportDialog(QDialog):
         self.status_label.setText("")
         self.success_label.setText("Импорт завершён успешно")
         self.report_label.setText(format_import_report(report))
+
+    def _confirm_name_mismatch(self, mismatch: StationNameMismatch) -> bool:
+        """Загружать ли файл по индексу, если название станции в нём не то,
+        что в справочнике. По умолчанию (Enter, Esc, закрытие окна) — не
+        загружать: залитые не той станции данные исправлять дольше, чем
+        повторить импорт."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(NAME_MISMATCH_TITLE)
+        box.setText(format_name_mismatch_question(mismatch))
+        load_btn = box.addButton(LOAD_BY_INDEX_TEXT, QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = box.addButton(DO_NOT_LOAD_TEXT, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.setEscapeButton(cancel_btn)
+        reserve_focus_width(load_btn, cancel_btn)  # жирный шрифт фокуса шире обычного
+        box.exec()
+        return box.clickedButton() is load_btn
 
     def _recompute_with_progress(self, report: ImportReport) -> None:
         self.status_label.setText("Идёт пересчёт агрегатов…")

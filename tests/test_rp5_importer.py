@@ -7,7 +7,7 @@ from meteoregik.db.schema import rp5_readings, stations
 from meteoregik.db.session import get_engine
 from meteoregik.importers.base import ImportFormatError
 from meteoregik.importers.rp5_importer import Rp5Importer
-from meteoregik.stations.matching import StationNotFoundError
+from meteoregik.stations.matching import StationNameMismatchError, StationNotFoundError
 
 DEFAULT_COLUMNS = [
     "Местное время в Мосальске",
@@ -140,7 +140,8 @@ def test_import_file_reuses_existing_station_by_wmo_index(tmp_path):
         tmp_path / "rp5.xlsx",
         rows=[["01.01.2020 09:00", 1.0, None, 90, None, None, 10, None]],
     )
-    Rp5Importer(engine).import_file(file_path)
+    # Название в справочнике другое — загрузку по индексу подтверждает пользователь
+    Rp5Importer(engine, confirm_name_mismatch=lambda mismatch: True).import_file(file_path)
 
     with engine.connect() as conn:
         n_stations = len(conn.execute(select(stations.c.id)).all())
@@ -205,3 +206,80 @@ def test_import_file_refuses_station_missing_in_directory(tmp_path):
     with engine.connect() as conn:
         assert conn.execute(select(rp5_readings)).first() is None
         assert conn.execute(select(stations).where(stations.c.wmo_index == 99999)).first() is None
+
+
+# --- сверка названия станции в файле со справочником ---
+
+_ROWS = [["01.01.2020 09:00", -1.2, "Осадков нет", 90, 13, None, 10, 2]]
+
+
+def _count_rows(engine):
+    with engine.connect() as conn:
+        return len(conn.execute(select(rp5_readings.c.id)).all())
+
+
+def test_import_stops_when_station_name_differs_and_nobody_confirms(tmp_path):
+    """Индекс файла попал на чужую станцию справочника (опечатка в индексе):
+    без подтверждения данные ей не записываются."""
+    engine = _engine_with_station(tmp_path, wmo=27707, name="Сухиничи")
+    file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", wmo=27707, name="Мосальск", rows=_ROWS)
+
+    with pytest.raises(StationNameMismatchError) as excinfo:
+        Rp5Importer(engine).import_file(file_path)
+
+    text = str(excinfo.value)
+    assert "«Мосальск»" in text and "«Сухиничи»" in text and "27707" in text
+    assert "Файл не загружен" in text
+    assert _count_rows(engine) == 0
+
+
+def test_import_stops_when_user_declines_name_mismatch(tmp_path):
+    engine = _engine_with_station(tmp_path, wmo=27707, name="Сухиничи")
+    file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", wmo=27707, name="Мосальск", rows=_ROWS)
+    asked = []
+
+    def decline(mismatch):
+        asked.append(mismatch)
+        return False
+
+    with pytest.raises(StationNameMismatchError):
+        Rp5Importer(engine, confirm_name_mismatch=decline).import_file(file_path)
+
+    assert [(m.wmo_index, m.name_in_file, m.name_in_directory) for m in asked] == [
+        (27707, "Мосальск", "Сухиничи")
+    ]
+    assert _count_rows(engine) == 0
+
+
+def test_confirmed_name_mismatch_loads_rows_under_directory_name(tmp_path):
+    """Подтверждённая загрузка по индексу: данные принадлежат станции
+    справочника, её названием и подписываются."""
+    engine = _engine_with_station(tmp_path, wmo=27612, name="Москва")
+    file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", wmo=27612, name="Москва (ВДНХ)", rows=_ROWS)
+
+    report = Rp5Importer(engine, confirm_name_mismatch=lambda mismatch: True).import_file(file_path)
+
+    assert report.imported_rows == 1
+    assert report.station_name == "Москва"
+    with engine.connect() as conn:
+        assert conn.execute(select(rp5_readings.c.station_name)).scalar_one() == "Москва"
+
+
+@pytest.mark.parametrize("name_in_file", ["мосальск", "МОСАЛЬСК", "  Мосальск ", "Мосальск"])
+def test_same_name_in_other_case_is_not_a_mismatch(tmp_path, name_in_file):
+    engine = _engine_with_station(tmp_path, name="Мосальск")
+    file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", name=name_in_file, rows=_ROWS)
+
+    def fail(mismatch):
+        raise AssertionError(f"вопрос не нужен: {mismatch}")
+
+    report = Rp5Importer(engine, confirm_name_mismatch=fail).import_file(file_path)
+
+    assert report.imported_rows == 1
+
+
+def test_yo_and_ye_are_the_same_letter_in_station_name(tmp_path):
+    engine = _engine_with_station(tmp_path, wmo=27719, name="Орёл")
+    file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", wmo=27719, name="Орел", rows=_ROWS)
+
+    assert Rp5Importer(engine).import_file(file_path).imported_rows == 1

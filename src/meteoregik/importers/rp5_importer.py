@@ -5,8 +5,14 @@
     "Метеостанция (?P<name>.+?), Россия, WMO_ID=(?P<wmo>\\d+),"
 Далее matching.require_stations проверяет, что станция с таким индексом есть
 в справочнике: если нет — импорт останавливается (StationNotFoundError), в
-справочник ничего не добавляется. Сама rp5_readings хранит wmo_index и
-station_name напрямую, без FK station_id (см. plan.md, п.11 решений).
+справочник ничего не добавляется. Название из шапки сверяется с названием
+станции в справочнике (matching.confirm_station_name): если они разные,
+загрузку по индексу подтверждает пользователь — иначе опечатка в индексе
+записала бы данные чужой станции. Сама rp5_readings хранит wmo_index и
+station_name напрямую, без FK station_id (см. plan.md, п.11 решений);
+station_name — название из справочника: после подтверждённого расхождения
+название из файла относилось бы уже не к той станции, которой принадлежат
+данные.
 
 Столбцы сопоставляются по имени заголовка (RP5_COLUMN_MAP), не по позиции —
 состав и порядок столбцов зависит от конкретной выгрузки с rp5.ru (см.
@@ -19,6 +25,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from datetime import datetime
 
 import pandas as pd
@@ -27,10 +34,12 @@ from sqlalchemy.engine import Engine
 
 from meteoregik.db.schema import rp5_readings
 from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
-from meteoregik.stations.matching import require_stations
+from meteoregik.stations.matching import StationNameMismatch, confirm_station_name, require_stations
 
 # Где в файле искать индекс — для сообщения StationNotFoundError
 INDEX_LOCATION = "в первой строке файла (WMO_ID=…)"
+# Где искать и индекс, и название — для сообщения StationNameMismatchError
+HEADER_LOCATION = "в первой строке файла"
 
 RP5_HEADER_RE = re.compile(r"Метеостанция\s+(?P<name>.+?),\s*Россия,\s*WMO_ID=(?P<wmo>\d+),")
 
@@ -101,14 +110,30 @@ def _clean(value: object) -> object | None:
 
 
 class Rp5Importer(Importer):
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self, engine: Engine, confirm_name_mismatch: Callable[[StationNameMismatch], bool] | None = None
+    ) -> None:
+        """confirm_name_mismatch — вопрос пользователю, загружать ли файл по
+        индексу, если станция в справочнике названа иначе, чем в файле
+        (True — загружать). Без него такое расхождение останавливает импорт."""
         self.engine = engine
+        self._confirm_name_mismatch = confirm_name_mismatch
 
     def import_file(self, file_path: str) -> ImportReport:
-        station_name, wmo_index = _parse_station_header(file_path)
+        name_in_file, wmo_index = _parse_station_header(file_path)
         # До чтения строк: файл за много лет читается долго, а без станции он не нужен
         with self.engine.connect() as conn:
-            require_stations(conn, [wmo_index], index_location=INDEX_LOCATION, name_from_file=station_name)
+            directory_names = require_stations(
+                conn, [wmo_index], index_location=INDEX_LOCATION, name_from_file=name_in_file
+            )
+        confirm_station_name(
+            name_in_file,
+            directory_names[wmo_index],
+            wmo_index,
+            index_location=HEADER_LOCATION,
+            confirm=self._confirm_name_mismatch,
+        )
+        station_name = directory_names[wmo_index] or name_in_file
         header_row = _find_header_row(file_path)
         df = pd.read_excel(file_path, header=header_row)
 
