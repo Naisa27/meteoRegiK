@@ -20,7 +20,11 @@ MainWindow сам решает, что делать. Кнопки — четыр
 исходных и агрегатных данных), "Расчёт показателей" (зелёные — отклонения
 от нормы, anomaly_calc_requested), "Справочники" (тёмное золото, station_directory_requested) и
 "Аналитика" (фиолетовый, дашборд — dashboard_requested, карта —
-map_requested)."""
+map_requested).
+
+Под часами — кнопка инструкции "Путеводитель по приложению" (guide_requested,
+решение пользователя 2026-10-11): светлая, не заливная — это справка, а не
+действие над данными, и спорить с рядами разделов она не должна."""
 
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ from PySide6.QtCore import QTimer, Qt, Signal, SignalInstance
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from meteoregik.guide import GUIDE_TITLE
 from meteoregik.resources import DASHBOARD_ICON_PATH, LOGO_PATH
 from meteoregik.ui import theme
 from meteoregik.ui.buttons import reserve_focus_width, tinted_icon
@@ -69,6 +74,7 @@ class GreetingWidget(QWidget):
     dashboard_requested = Signal()
     map_requested = Signal()
     station_directory_requested = Signal()
+    guide_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -148,7 +154,19 @@ class GreetingWidget(QWidget):
         self._clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._clock_label)
 
-        layout.addSpacing(32)
+        layout.addSpacing(8)
+        self.guide_btn = QPushButton(GUIDE_TITLE)
+        self.guide_btn.setObjectName("skySoft")
+        # Свой стиль, а не стиль приложения: фон виджета ("background: …" в
+        # __init__) наследуется детьми и перекрыл бы заливку кнопки
+        self.guide_btn.setStyleSheet(theme.BUTTON_QSS)
+        self.guide_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.guide_btn.setToolTip("Как работать с программой: порядок действий и описание каждого экрана")
+        reserve_focus_width(self.guide_btn)
+        self.guide_btn.clicked.connect(self.guide_requested.emit)
+        layout.addWidget(self.guide_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        layout.addSpacing(26)
 
         # Четыре ряда кнопок по разделам работы (правка 2026-09-30, четвёртый
         # "Аналитика" — 2026-10-05): у каждого

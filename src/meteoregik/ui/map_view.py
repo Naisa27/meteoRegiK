@@ -74,7 +74,7 @@ from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.dashboard_view import DASHBOARD_QSS, DashboardDialog
 from meteoregik.ui.dashboard_widgets import mode_switch
 from meteoregik.ui.date_field import DateField, DateFieldError
-from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
+from meteoregik.ui.dialogs import enable_min_max_buttons, exec_window_modal, minimize_owner_instead
 from meteoregik.ui.loading_overlay import LoadingOverlay
 
 _TITLE = "Карта"
@@ -563,7 +563,7 @@ class MapDialog(QDialog):
 
     def _open_dashboard(self, wmo_index: int) -> None:
         self.play_btn.setChecked(False)
-        DashboardDialog(self.engine, self, wmo_index=wmo_index).exec()
+        exec_window_modal(DashboardDialog(self.engine, self, wmo_index=wmo_index))
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)

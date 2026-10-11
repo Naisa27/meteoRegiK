@@ -65,7 +65,7 @@ from meteoregik.preferences import Preferences
 from meteoregik.stations.choices import StationChoice, load_directory_stations, load_stations_in_table
 from meteoregik.ui import theme
 from meteoregik.ui.date_field import DateField, DateFieldError
-from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons
+from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons, exec_window_modal
 from meteoregik.ui.station_combo import ALL_STATIONS_TEXT, StationCombo
 
 PAGE_SIZE = 100
@@ -766,7 +766,7 @@ class DataBrowserDialog(QDialog):
         dialog = _FieldsDialog(
             self._spec.optional_fields(), set(self._selected_fields), self, fixed_headers=fixed_headers
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if exec_window_modal(dialog) != QDialog.DialogCode.Accepted:
             return
         self._selected_fields = dialog.selected_columns()
         self._preferences.set(self._preference_key(self._spec), self._selected_fields)
@@ -863,7 +863,7 @@ class DataBrowserDialog(QDialog):
         dialog = _AddRowDialog(
             self.rp5_radio.isChecked(), load_directory_stations(self.engine), preselected_wmo, self
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_values is None:
+        if exec_window_modal(dialog) != QDialog.DialogCode.Accepted or dialog.result_values is None:
             return
         try:
             self._model.insert_row(dialog.result_values)

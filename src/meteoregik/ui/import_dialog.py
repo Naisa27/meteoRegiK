@@ -18,7 +18,12 @@ progress_callback(day) на каждый обработанный день.
 
 Если содержимое файла не соответствует выбранному формату (rp5/ГГ), импортёр
 бросает ImportFormatError с понятным сообщением — обрабатывается отдельно от
-прочих ошибок, с отдельным заголовком диалога (см. importers/base.py)."""
+прочих ошибок, с отдельным заголовком диалога (см. importers/base.py).
+
+Если станции из файла нет в справочнике, импортёр бросает
+StationNotFoundError (stations/matching.py) — файл не загружается, а
+сообщение отправляет проверить индекс или добавить станцию в "Справочниках"
+(решение пользователя 2026-10-11: импорт станции не создаёт)."""
 
 from __future__ import annotations
 
@@ -33,7 +38,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -48,8 +52,10 @@ from meteoregik.calculations.recompute import ConflictChoice, ValueConflict, rec
 from meteoregik.importers.base import ImportFormatError, ImportReport
 from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.importers.rp5_importer import Rp5Importer
+from meteoregik.stations.matching import StationNotFoundError
 from meteoregik.ui import theme
 
+STATION_NOT_FOUND_TITLE = "Станции нет в справочнике"
 REPORT_LINES = 6  # строк в тексте format_import_report (у ГГ; у rp5 на одну меньше)
 
 _PERIOD_TYPE_NAMES = {"day": "сутки", "decade": "декада", "month": "месяц", "year": "год"}
@@ -216,7 +222,7 @@ class ImportDialog(QDialog):
             if self.rp5_radio.isChecked():
                 importer = Rp5Importer(self.engine)
             else:
-                importer = GgImporter(self.engine, name_resolver=self._resolve_station_name)
+                importer = GgImporter(self.engine)
             report = importer.import_file(file_path)
 
             if report.imported_rows > 0 and report.wmo_index is not None:
@@ -224,6 +230,11 @@ class ImportDialog(QDialog):
         except ImportFormatError as exc:
             self.status_label.setText("")
             QMessageBox.critical(self, "Неверный формат файла", str(exc))
+            return
+        except StationNotFoundError as exc:
+            # Не ошибка программы, а то, что пользователь исправляет сам — предупреждение
+            self.status_label.setText("")
+            QMessageBox.warning(self, STATION_NOT_FOUND_TITLE, str(exc))
             return
         except Exception as exc:  # noqa: BLE001 — показываем пользователю любую ошибку импорта
             self.status_label.setText("")
@@ -302,13 +313,3 @@ class ImportDialog(QDialog):
             return "old"  # keep_old_btn или диалог закрыт без выбора
 
         return _resolve
-
-    def _resolve_station_name(self, wmo_index: int) -> str:
-        name, ok = QInputDialog.getText(
-            self,
-            "Новая станция",
-            f"Станция с индексом ВМО {wmo_index} не найдена в справочнике.\nВведите название станции:",
-        )
-        if not ok or not name.strip():
-            raise ValueError(f"Название станции для wmo_index={wmo_index} не введено — импорт отменён")
-        return name.strip()

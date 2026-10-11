@@ -13,7 +13,7 @@
 сохранённого в computed_indicators (например, для одной и той же даты
 среднесуточная rp5-агрегация не совпадает со значением из файла ГГ),
 вызывающему коду (UI) передаётся ValueConflict через опциональный callback
-conflict_resolver — тем же паттерном, что и name_resolver в gg_importer.py.
+conflict_resolver.
 Без conflict_resolver сохраняется прежнее поведение: новое значение всегда
 побеждает.
 """

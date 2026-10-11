@@ -24,9 +24,8 @@ def test_import_button_under_greeting_opens_import_dialog():
     window = MainWindow(engine)
 
     with patch("meteoregik.ui.main_window.ImportDialog") as mock_dialog_cls:
-        button = window.centralWidget().findChild(QPushButton)
-        assert button is not None
-        button.click()
+        buttons = window.centralWidget().findChildren(QPushButton)
+        next(b for b in buttons if b.text() == "Импорт данных").click()
 
     mock_dialog_cls.assert_called_once_with(engine, window)
     mock_dialog_cls.return_value.exec.assert_called_once()

@@ -199,6 +199,38 @@ def test_run_import_shows_clear_message_for_wrong_format(tmp_path, monkeypatch):
     assert dialog.close_btn.isEnabled()
 
 
+def test_run_import_refuses_file_of_station_missing_in_directory(tmp_path, monkeypatch):
+    _qapp()
+    engine = get_engine(tmp_path / "test.sqlite3")
+    run_migrations(engine)  # справочник пуст — станции 27707 в нём нет
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"])
+    ws.append([27707, 2020, 1, 1, 1.0, 2.0, 0.0, -1.0])
+    file_path = str(tmp_path / "gg.xlsx")
+    wb.save(file_path)
+
+    dialog = ImportDialog(engine)
+    dialog.file_edit.setText(file_path)
+    dialog.gg_radio.setChecked(True)
+
+    calls = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda parent, title, text: calls.append((title, text))))
+
+    dialog._run_import()
+
+    assert len(calls) == 1
+    title, text = calls[0]
+    assert title == "Станции нет в справочнике"
+    assert "27707" in text and "Файл не загружен" in text
+    assert "Добавить станцию" in text
+    # отчёта об успехе нет, кнопки снова доступны
+    assert dialog.success_label.text() == ""
+    assert dialog.report_label.text() == ""
+    assert dialog.import_btn.isEnabled()
+
+
 def test_import_dialog_buttons_have_rounded_corners():
     _qapp()
     engine = get_engine(":memory:")

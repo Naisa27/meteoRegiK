@@ -324,6 +324,9 @@ def test_choose_fields_dialog_saves_selection(tmp_path, monkeypatch):
         def __init__(self, fields, selected, parent=None, fixed_headers=()):
             received["fixed_headers"] = fixed_headers
 
+        def setWindowModality(self, modality):  # формы открываются через exec_window_modal
+            pass
+
         def exec(self):
             return QDialog.DialogCode.Accepted
 
@@ -529,6 +532,9 @@ def test_add_row_before_apply_does_not_load_table(tmp_path, messages, monkeypatc
         }
 
         def __init__(self, *args, **kwargs):
+            pass
+
+        def setWindowModality(self, modality):  # формы открываются через exec_window_modal
             pass
 
         def exec(self):

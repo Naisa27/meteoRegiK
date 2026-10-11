@@ -77,7 +77,7 @@ from meteoregik.ui.aggregate_table_view import show_grid
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.date_field import DateField, DateFieldError
-from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
+from meteoregik.ui.dialogs import enable_min_max_buttons, exec_window_modal, minimize_owner_instead
 from meteoregik.ui.loading_overlay import LoadingOverlay
 from meteoregik.ui.station_combo import StationCombo
 
@@ -453,7 +453,7 @@ class AggregateViewDialog(QDialog):
 
     def _choose_parameters(self) -> None:
         dialog = _ParametersDialog(self._selected_parameter_keys, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if exec_window_modal(dialog) != QDialog.DialogCode.Accepted:
             return
         self._selected_parameter_keys = set(dialog.selected_parameters())
         self._refresh_params_label()

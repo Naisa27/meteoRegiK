@@ -14,8 +14,7 @@ def test_greeting_widget_emits_import_requested_on_button_click():
     emitted = {"n": 0}
     widget.import_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
 
-    button = widget.findChild(QPushButton)
-    assert button is not None
+    button = next(b for b in widget.findChildren(QPushButton) if b.text() == "Импорт данных")
     button.click()
 
     assert emitted["n"] == 1
@@ -37,8 +36,9 @@ def test_greeting_widget_emits_data_browser_requested_on_button_click():
     widget.data_browser_requested.connect(lambda: emitted.__setitem__("n", emitted["n"] + 1))
 
     buttons = widget.findChildren(QPushButton)
-    # три кнопки "Работы с данными", "Отклонения от нормы", "Справочники", "Дашборд" и "Карта"
-    assert len(buttons) == 7
+    # "Путеводитель по приложению", три кнопки "Работы с данными", "Отклонения
+    # от нормы", "Справочники", "Дашборд" и "Карта"
+    assert len(buttons) == 8
     data_browser_btn = next(b for b in buttons if b.text() == "Просмотр исходных данных")
     data_browser_btn.click()
 

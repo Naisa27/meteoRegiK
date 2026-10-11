@@ -85,7 +85,7 @@ from meteoregik.stations.directory_importer import (
 from meteoregik.ui import theme
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
-from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons
+from meteoregik.ui.dialogs import ask_yes_no, enable_min_max_buttons, exec_window_modal
 from meteoregik.ui.loading_overlay import LoadingOverlay
 
 ALL_COUNTRIES_TEXT = "Все страны"
@@ -902,7 +902,7 @@ class StationDirectoryDialog(QDialog):
 
     def _add_station(self) -> None:
         dialog = AddStationDialog(self.engine, self.stations_model.regions, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.added_wmo is None:
+        if exec_window_modal(dialog) != QDialog.DialogCode.Accepted or dialog.added_wmo is None:
             return
         self.stations_model.reload()
         self._apply_filters()
@@ -925,7 +925,7 @@ class StationDirectoryDialog(QDialog):
 
     def _add_region(self) -> None:
         dialog = AddRegionDialog(self.engine, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.added_code is None:
+        if exec_window_modal(dialog) != QDialog.DialogCode.Accepted or dialog.added_code is None:
             return
         self._reload_all()
         row = next(i for i, r in enumerate(self.regions_model.records) if r.code == dialog.added_code)

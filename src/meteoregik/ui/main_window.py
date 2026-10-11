@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from sqlalchemy.engine import Engine
@@ -7,7 +9,9 @@ from sqlalchemy.engine import Engine
 from meteoregik.ui.dashboard_view import DashboardDialog
 from meteoregik.ui.data_browser import DataBrowserDialog
 from meteoregik.ui.anomaly_calc_dialog import AnomalyCalcDialog
+from meteoregik.ui.dialogs import exec_window_modal
 from meteoregik.ui.greeting_widget import GreetingWidget
+from meteoregik.ui.guide_window import GuideWindow
 from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
 from meteoregik.ui.station_directory import StationDirectoryDialog
@@ -22,7 +26,10 @@ class MainWindow(QMainWindow):
     Без верхнего меню — действия (импорт, просмотр данных, просмотр
     агрегатных данных) доступны кнопками на приветственном экране (см.
     GreetingWidget.import_requested / .data_browser_requested /
-    .aggregate_view_requested)."""
+    .aggregate_view_requested).
+
+    Экраны открываются модально для главного окна, а не для всего приложения
+    (dialogs.exec_window_modal) — иначе они блокировали бы и путеводитель."""
 
     def __init__(self, engine: Engine) -> None:
         super().__init__()
@@ -44,9 +51,11 @@ class MainWindow(QMainWindow):
         greeting.dashboard_requested.connect(self._open_dashboard)
         greeting.map_requested.connect(self._open_map)
         greeting.station_directory_requested.connect(self._open_station_directory)
+        greeting.guide_requested.connect(self._open_guide)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
         self._initial_focus_set = False
+        self._guide: GuideWindow | None = None
 
         self.setCentralWidget(central)
 
@@ -78,25 +87,47 @@ class MainWindow(QMainWindow):
         frame.moveCenter(available.center())
         self.move(max(frame.left(), available.left()), max(frame.top(), available.top()))
 
+    def _open_guide(self) -> None:
+        """Путеводитель — одно немодальное окно на всё время работы: повторное
+        нажатие кнопки возвращает его на передний план на том же разделе."""
+        if self._guide is None:
+            self._guide = GuideWindow(self._data_dir())
+            self._guide.place_beside(self)
+        self._guide.bring_to_front()
+
+    def _data_dir(self) -> Path | None:
+        """Папка рабочей базы — её называет раздел "Где хранятся данные"."""
+        database = self.engine.url.database
+        if not database or database == ":memory:":
+            return None
+        return Path(database).resolve().parent
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — имя метода Qt
+        # Путеводитель — окно без родителя (см. ui/guide_window.py): само с
+        # главным окном не закроется и не дало бы программе завершиться
+        if self._guide is not None:
+            self._guide.close()
+        super().closeEvent(event)
+
     def _open_import_dialog(self) -> None:
         dialog = ImportDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_data_browser(self) -> None:
         dialog = DataBrowserDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_aggregate_view(self) -> None:
         dialog = AggregateViewDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_dashboard(self) -> None:
         dialog = DashboardDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_anomaly_calc(self) -> None:
         dialog = AnomalyCalcDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_map(self) -> None:
         # Импорт здесь, а не в начале модуля: карта тянет за собой браузерный
@@ -104,8 +135,8 @@ class MainWindow(QMainWindow):
         from meteoregik.ui.map_view import MapDialog
 
         dialog = MapDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)
 
     def _open_station_directory(self) -> None:
         dialog = StationDirectoryDialog(self.engine, self)
-        dialog.exec()
+        exec_window_modal(dialog)

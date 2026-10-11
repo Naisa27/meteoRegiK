@@ -1,38 +1,36 @@
 """Импортёр формата ГГ (среднесуточные показатели) -> gg_readings.
 
 Источник: "Индекс ВМО, Год, Месяц, День, Tavg, Tmax, RRR, Tmin". В файле нет
-названия станции — matching.find_or_create_station(wmo_index) гарантирует,
-что запись в stations существует (создаёт новую станцию и запрашивает у
-пользователя название, если не найдена); gg_readings хранит wmo_index
-напрямую (без FK на stations.id — см. plan.md, п.11 решений), station_name
-резолвится через stations.name по wmo_index и кэшируется для читаемости.
-
-Запрос имени для новой станции — через опциональный callback name_resolver
-(wmo_index -> name), который передаёт вызывающий код (UI: экран "Импорт").
-Без callback'а и без существующей станции с таким wmo_index импорт падает с
-понятной ошибкой, а не тихо пропускает строки.
+названия станции — matching.require_stations проверяет, что все станции
+файла есть в справочнике: если какой-то нет, импорт останавливается
+(StationNotFoundError со всеми ненайденными индексами), ничего не
+загружается и в справочник ничего не добавляется. gg_readings хранит
+wmo_index напрямую (без FK на stations.id — см. plan.md, п.11 решений),
+station_name берётся из stations.name по wmo_index и кэшируется для
+читаемости.
 
 Строка без единого значимого значения (все четыре — Tavg, Tmax, Tmin, RRR —
 пусты) не загружается и не участвует ни в периоде отчёта, ни в создании
-станции (иначе из-за пустой строки пришлось бы спрашивать имя новой
-станции); их количество попадает в отчёт (rows_without_data).
+проверке станции (пустая строка с неизвестным индексом импорт не
+останавливает); их количество попадает в отчёт (rows_without_data).
 """
 
 from __future__ import annotations
 
 import os
 from datetime import date
-from typing import Callable
 
 import pandas as pd
 from sqlalchemy import select
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Engine
 
-from meteoregik.db.schema import gg_readings, stations
+from meteoregik.db.schema import gg_readings
 from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
-from meteoregik.stations.matching import find_or_create_station
+from meteoregik.stations.matching import require_stations
 
 REQUIRED_COLUMNS = ("Индекс ВМО", "Год", "Месяц", "День")
+# Где в файле искать индекс — для сообщения StationNotFoundError
+INDEX_LOCATION = "в столбце «Индекс ВМО»"
 VALUE_FIELDS = ("t_avg", "t_min", "t_max", "rrr_precipitation")
 
 
@@ -50,25 +48,9 @@ def _check_format(df: pd.DataFrame, file_path: str) -> None:
         )
 
 
-def _ensure_station(
-    conn: Connection, wmo_index: int, name_resolver: Callable[[int], str] | None
-) -> None:
-    try:
-        find_or_create_station(conn, wmo_index)
-    except ValueError:
-        if name_resolver is None:
-            raise ValueError(
-                f"Станция с wmo_index={wmo_index} не найдена в справочнике — "
-                "нужно имя для создания новой записи (name_resolver не передан)"
-            ) from None
-        name = name_resolver(wmo_index)
-        find_or_create_station(conn, wmo_index, name=name)
-
-
 class GgImporter(Importer):
-    def __init__(self, engine: Engine, name_resolver: Callable[[int], str] | None = None) -> None:
+    def __init__(self, engine: Engine) -> None:
         self.engine = engine
-        self.name_resolver = name_resolver
 
     def import_file(self, file_path: str) -> ImportReport:
         df = pd.read_excel(file_path)
@@ -101,12 +83,9 @@ class GgImporter(Importer):
         period_end = max(r["obs_date"] for r in parsed_rows)
 
         with self.engine.begin() as conn:
-            station_names: dict[int, str] = {}
-            for wmo_index in {r["wmo_index"] for r in parsed_rows}:
-                _ensure_station(conn, wmo_index, self.name_resolver)
-                station_names[wmo_index] = conn.execute(
-                    select(stations.c.name).where(stations.c.wmo_index == wmo_index)
-                ).scalar_one()
+            station_names = require_stations(
+                conn, {r["wmo_index"] for r in parsed_rows}, index_location=INDEX_LOCATION
+            )
 
             rows_to_insert = [
                 {

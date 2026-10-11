@@ -7,6 +7,7 @@ from meteoregik.db.schema import rp5_readings, stations
 from meteoregik.db.session import get_engine
 from meteoregik.importers.base import ImportFormatError
 from meteoregik.importers.rp5_importer import Rp5Importer
+from meteoregik.stations.matching import StationNotFoundError
 
 DEFAULT_COLUMNS = [
     "Местное время в Мосальске",
@@ -35,9 +36,17 @@ def _write_rp5_xlsx(path, wmo=27704, name="Мосальск", columns=None, rows
     return str(path)
 
 
-def test_import_file_parses_header_and_rows(tmp_path):
+def _engine_with_station(tmp_path, wmo=27704, name="Мосальск"):
+    """База со станцией в справочнике: без неё импорт не выполняется."""
     engine = get_engine(tmp_path / "test.sqlite3")
     run_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(stations.insert().values(name=name, wmo_index=wmo))
+    return engine
+
+
+def test_import_file_parses_header_and_rows(tmp_path):
+    engine = _engine_with_station(tmp_path)
 
     file_path = _write_rp5_xlsx(
         tmp_path / "rp5.xlsx",
@@ -79,8 +88,7 @@ def test_import_file_parses_header_and_rows(tmp_path):
 
 
 def test_import_file_is_idempotent_on_reimport(tmp_path):
-    engine = get_engine(tmp_path / "test.sqlite3")
-    run_migrations(engine)
+    engine = _engine_with_station(tmp_path)
 
     file_path = _write_rp5_xlsx(
         tmp_path / "rp5.xlsx",
@@ -101,8 +109,7 @@ def test_import_file_is_idempotent_on_reimport(tmp_path):
 
 
 def test_import_file_dedups_by_date_and_time_allows_multiple_times_per_day(tmp_path):
-    engine = get_engine(tmp_path / "test.sqlite3")
-    run_migrations(engine)
+    engine = _engine_with_station(tmp_path)
 
     file_path = _write_rp5_xlsx(
         tmp_path / "rp5.xlsx",
@@ -144,8 +151,7 @@ def test_import_file_reuses_existing_station_by_wmo_index(tmp_path):
 
 
 def test_import_file_handles_missing_optional_columns(tmp_path):
-    engine = get_engine(tmp_path / "test.sqlite3")
-    run_migrations(engine)
+    engine = _engine_with_station(tmp_path)
 
     # Файл без ff3/sss в выгрузке — состав столбцов зависит от того, что
     # пользователь выбрал на rp5.ru.
@@ -179,3 +185,23 @@ def test_import_file_raises_clear_error_for_wrong_format(tmp_path):
 
     with pytest.raises(ImportFormatError, match="неверный формат"):
         Rp5Importer(engine).import_file(file_path)
+
+
+def test_import_file_refuses_station_missing_in_directory(tmp_path):
+    """Станции из шапки файла нет в справочнике — импорт останавливается:
+    ни строк, ни новой станции (раньше станция создавалась молча)."""
+    engine = _engine_with_station(tmp_path)
+    file_path = _write_rp5_xlsx(
+        tmp_path / "rp5.xlsx", wmo=99999, name="Калуга",
+        rows=[["01.01.2020 09:00", 1.0, None, 90, None, None, 10, None]],
+    )
+
+    with pytest.raises(StationNotFoundError) as excinfo:
+        Rp5Importer(engine).import_file(file_path)
+
+    assert excinfo.value.wmo_indexes == [99999]
+    assert "«Калуга»" in str(excinfo.value)
+    assert "WMO_ID" in str(excinfo.value)
+    with engine.connect() as conn:
+        assert conn.execute(select(rp5_readings)).first() is None
+        assert conn.execute(select(stations).where(stations.c.wmo_index == 99999)).first() is None

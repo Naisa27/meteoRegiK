@@ -3,8 +3,9 @@
 Из первой строки шапки (между последними "#"-строками) регэкспом парсится и
 название станции, и WMO_ID:
     "Метеостанция (?P<name>.+?), Россия, WMO_ID=(?P<wmo>\\d+),"
-Далее matching.find_or_create_station(wmo, name) только гарантирует, что
-запись в stations существует — сама rp5_readings хранит wmo_index и
+Далее matching.require_stations проверяет, что станция с таким индексом есть
+в справочнике: если нет — импорт останавливается (StationNotFoundError), в
+справочник ничего не добавляется. Сама rp5_readings хранит wmo_index и
 station_name напрямую, без FK station_id (см. plan.md, п.11 решений).
 
 Столбцы сопоставляются по имени заголовка (RP5_COLUMN_MAP), не по позиции —
@@ -26,7 +27,10 @@ from sqlalchemy.engine import Engine
 
 from meteoregik.db.schema import rp5_readings
 from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
-from meteoregik.stations.matching import find_or_create_station
+from meteoregik.stations.matching import require_stations
+
+# Где в файле искать индекс — для сообщения StationNotFoundError
+INDEX_LOCATION = "в первой строке файла (WMO_ID=…)"
 
 RP5_HEADER_RE = re.compile(r"Метеостанция\s+(?P<name>.+?),\s*Россия,\s*WMO_ID=(?P<wmo>\d+),")
 
@@ -102,6 +106,9 @@ class Rp5Importer(Importer):
 
     def import_file(self, file_path: str) -> ImportReport:
         station_name, wmo_index = _parse_station_header(file_path)
+        # До чтения строк: файл за много лет читается долго, а без станции он не нужен
+        with self.engine.connect() as conn:
+            require_stations(conn, [wmo_index], index_location=INDEX_LOCATION, name_from_file=station_name)
         header_row = _find_header_row(file_path)
         df = pd.read_excel(file_path, header=header_row)
 
@@ -130,8 +137,6 @@ class Rp5Importer(Importer):
         period_end = max(r["obs_date"] for r in parsed_rows)
 
         with self.engine.begin() as conn:
-            find_or_create_station(conn, wmo_index, name=station_name)
-
             existing_keys = set(
                 conn.execute(
                     select(rp5_readings.c.obs_date, rp5_readings.c.obs_time).where(
