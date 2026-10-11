@@ -52,9 +52,22 @@ calculations/recompute.py для диалога разрешения конфл�
 требующими расчёта отклонений. Таблицы не меняются; расчёт берётся из
 текущего кода — следующие миграции, меняющие правила сумм, просто
 пересчитают их ещё раз.
+
+Обновление у пользователя (решение 2026-10-11). Миграции с пересчётом
+данных перечислены в DATA_UPDATES: что именно досчитывается, словами для
+пользователя. Если такие ждут применения и в базе есть данные
+(pending_data_updates), main.py запускает миграции не молча, а через окно
+ui/upgrade_dialog.py — с копией базы перед началом (backup_database) и ходом
+расчёта по станциям (параметр progress). Все миграции идут одной
+транзакцией: при сбое база остаётся прежней, попытка повторится при
+следующем запуске.
 """
 
 from __future__ import annotations
+
+import sqlite3
+from collections.abc import Callable
+from pathlib import Path
 
 from sqlalchemy import delete, inspect, select
 from sqlalchemy.engine import Connection, Engine
@@ -73,8 +86,62 @@ from meteoregik.db.schema import (
 
 CURRENT_SCHEMA_VERSION = 7
 
+# Миграции, которые досчитывают показатели по уже залитым данным: номер
+# версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
+# Текст видит пользователь в окне обновления.
+DATA_UPDATES: dict[int, str] = {
+    7: "суммы осадков за сутки, декаду, месяц и год",
+}
+BACKUP_SUFFIX = "_до_обновления"
 
-def run_migrations(engine: Engine) -> None:
+# Ход расчёта по станциям: номер станции, всего станций, индекс ВМО
+StationProgress = Callable[[int, int, int], None]
+
+
+def _stored_version(engine: Engine) -> int | None:
+    """Версия схемы базы; None — база ещё не создана (таблицы версии нет)."""
+    if not inspect(engine).has_table("schema_version"):
+        return None
+    with engine.connect() as conn:
+        return conn.execute(select(schema_version.c.version)).scalar_one()
+
+
+def pending_data_updates(engine: Engine) -> list[str]:
+    """Что предстоит досчитать при обновлении этой базы — описания из
+    DATA_UPDATES. Пусто, если база актуальна, только что создана или в ней
+    нет залитых данных: считать нечего, окно обновления не нужно."""
+    version = _stored_version(engine)
+    if version is None or version >= CURRENT_SCHEMA_VERSION:
+        return []
+    with engine.connect() as conn:
+        if not precipitation.stations_with_readings(conn):
+            return []
+    return [text for number, text in sorted(DATA_UPDATES.items()) if number > version]
+
+
+def backup_path(db_path: Path) -> Path:
+    return db_path.with_name(f"{db_path.stem}{BACKUP_SUFFIX}{db_path.suffix}")
+
+
+def backup_database(db_path: Path) -> Path:
+    """Копия базы перед обновлением — рядом с ней, одна (прежняя копия
+    заменяется). Через механизм резервного копирования SQLite, а не
+    копированием файла: часть данных может лежать в файле журнала (-wal)."""
+    target = backup_path(db_path)
+    source = sqlite3.connect(db_path)
+    try:
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+    finally:
+        source.close()
+    return target
+
+
+def run_migrations(engine: Engine, progress: StationProgress | None = None) -> None:
+    """progress — ход миграций, досчитывающих данные (см. DATA_UPDATES)."""
     inspector = inspect(engine)
     if not inspector.has_table("schema_version"):
         metadata.create_all(engine)
@@ -98,7 +165,7 @@ def run_migrations(engine: Engine) -> None:
             if version < 6:
                 _migrate_to_6(conn)
             if version < 7:
-                _migrate_to_7(conn)
+                _migrate_to_7(conn, progress)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -134,8 +201,11 @@ def _migrate_to_6(conn: Connection) -> None:
     metadata.create_all(conn, tables=[station_norms, period_completeness, anomaly_state], checkfirst=True)
 
 
-def _migrate_to_7(conn: Connection) -> None:
-    for wmo_index in precipitation.stations_with_readings(conn):
+def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:
+    wmo_indexes = precipitation.stations_with_readings(conn)
+    for number, wmo_index in enumerate(wmo_indexes, start=1):
+        if progress is not None:
+            progress(number, len(wmo_indexes), wmo_index)
         precipitation.rebuild_station(conn, wmo_index)
         # То же, что anomalies.mark_stale: суточные значения станции изменились
         conn.execute(delete(anomaly_state).where(anomaly_state.c.wmo_index == wmo_index))
