@@ -302,11 +302,12 @@ def test_empty_database_shows_hint(tmp_path):
 # --- диалог ---
 
 
-def test_dashboard_has_two_tabs_and_loads_source_tab_on_open(engine):
+def test_dashboard_loads_source_tab_on_open(engine):
     _qapp()
     dialog = DashboardDialog(engine, run_async=False)
 
-    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == [TAB_TEMPERATURE, TAB_SOURCE]
+    assert dialog.tabs.tabText(0) == TAB_TEMPERATURE
+    assert dialog.tabs.tabText(dialog.tabs.indexOf(dialog.source_tab)) == TAB_SOURCE
     assert dialog.tabs.currentIndex() == 0
     assert dialog.source_tab.stations_model.rows == []  # вторая вкладка ещё не открывалась
 

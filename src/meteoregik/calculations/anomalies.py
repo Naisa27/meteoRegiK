@@ -15,12 +15,13 @@
 Параметров два (корректировка 2026-10-11): температура и сумма осадков.
 Расчёт у них один и тот же, различия собраны в ParameterRules:
 - значение периода: у температуры средняя ('avg'), у осадков сумма ('sum');
-- полнота: у температуры месяц полный по правилу ВМО "3/5", декада — при
-  пропуске не больше MAX_MISSING_DECADE_DAYS дней. У осадков месяц и декада
-  полные только без единого пропущенного дня (решение пользователя; так
-  рекомендует ВМО для сумм): пропущенный день среднюю почти не сдвигает, а
-  сумму занижает всегда;
 - сезоны есть только у осадков.
+Полнота у обоих параметров одна: месяц полный по правилу ВМО "3/5", декада —
+при пропуске не больше MAX_MISSING_DECADE_DAYS дней. До 2026-10-12 месяц и
+декада осадков были полными только без единого пропущенного дня (так ВМО
+рекомендует для сумм: пропущенный день сумму занижает всегда), но на rp5 это
+отсекало большую часть архива — у Мосальска 13 лет из 20, — и пользователь
+решил считать осадки по тому же правилу, что температуру.
 Станция считается целиком и по обоим параметрам сразу: состояние расчёта
 (anomaly_state) — одно на станцию. Отклонение осадков хранится в миллиметрах
 (значение минус норма); процент нормы считают экраны из него и нормы.
@@ -72,7 +73,8 @@ PERIOD_SEASON = precipitation.PERIOD_SEASON
 # Меняется при изменении правил расчёта: сохранённое со старой версией
 # считается устаревшим и пересчитывается.
 # 2 — добавлены осадки: нормы, отклонения и полнота второго параметра, сезоны.
-RULE_VERSION = 2
+# 3 — полнота осадков по правилу "3/5", как у температуры (была "без пропусков").
+RULE_VERSION = 3
 
 # Правило ВМО "3/5" для месячной средней (WMO-No. 1203): не больше 5
 # пропущенных дней всего и не больше 3 подряд.
@@ -131,7 +133,7 @@ class StationNorms:
 
 
 def month_is_complete(days_with_data: set[int], days_in_month: int) -> bool:
-    """Правило "3/5" по номерам дней месяца, за которые есть суточная средняя."""
+    """Правило "3/5" по номерам дней месяца, за которые есть суточное значение."""
     missing = 0
     run = 0
     for day in range(1, days_in_month + 1):
@@ -149,15 +151,6 @@ def decade_is_complete(days_with_data: int, length: int) -> bool:
     return length - days_with_data <= MAX_MISSING_DECADE_DAYS
 
 
-def month_has_no_gaps(days_with_data: set[int], days_in_month: int) -> bool:
-    """Полнота для сумм: значение есть за каждый день месяца."""
-    return len(days_with_data) >= days_in_month
-
-
-def decade_has_no_gaps(days_with_data: int, length: int) -> bool:
-    return days_with_data >= length
-
-
 @dataclass(frozen=True)
 class ParameterRules:
     """Чем расчёт одного параметра отличается от другого."""
@@ -165,8 +158,6 @@ class ParameterRules:
     parameter: str
     stat_type: str  # вид статистики значения периода: 'avg' | 'sum'
     digits: int  # округление значения декады, как у сохранённых значений
-    month_complete: Callable[[set[int], int], bool]
-    decade_complete: Callable[[int, int], bool]
     has_seasons: bool = False
 
     def combine(self, values: list[float]) -> float:
@@ -175,10 +166,9 @@ class ParameterRules:
         return round(total, self.digits)
 
 
-TEMPERATURE = ParameterRules(PARAMETER, "avg", 2, month_is_complete, decade_is_complete)
+TEMPERATURE = ParameterRules(PARAMETER, "avg", 2)
 PRECIPITATION = ParameterRules(
-    PARAMETER_PRECIPITATION, precipitation.STAT_SUM, precipitation.ROUND_DIGITS,
-    month_has_no_gaps, decade_has_no_gaps, has_seasons=True,
+    PARAMETER_PRECIPITATION, precipitation.STAT_SUM, precipitation.ROUND_DIGITS, has_seasons=True
 )
 ALL_RULES: tuple[ParameterRules, ...] = (TEMPERATURE, PRECIPITATION)
 _RULES_BY_PARAMETER = {rules.parameter: rules for rules in ALL_RULES}
@@ -246,7 +236,7 @@ def compute_norms(
     значение сезона по дате его начала."""
     present = days_by_month(day_values)
     complete_months = {
-        key for key in months if rules.month_complete(present.get(key, set()), monthrange(*key)[1])
+        key for key in months if month_is_complete(present.get(key, set()), monthrange(*key)[1])
     }
     complete_years = {
         year for year in years if all((year, month) in complete_months for month in range(1, 13))
@@ -268,7 +258,7 @@ def compute_norms(
     # Норма декады — по полным декадам тех же месяцев, что вошли в базу нормы
     by_decade: dict[DecadeKey, list[float]] = {}
     for start, (value, count, length) in decade_values(rules, day_values).items():
-        if rules.decade_complete(count, length) and (start.year, start.month) in norm_months:
+        if decade_is_complete(count, length) and (start.year, start.month) in norm_months:
             by_decade.setdefault((start.month, start.day), []).append(value)
     decade_norms = {key: fmean(values) for key, values in by_decade.items()}
 

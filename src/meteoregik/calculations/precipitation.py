@@ -178,6 +178,42 @@ def main_series(conn: Connection, wmo_index: int) -> int | None:
     return pick_main_series(counts)
 
 
+TERMS_PER_DAY = 24 // SERIES_PERIOD_HOURS
+
+
+def days_with_missed_term(conn: Connection, wmo_index: int) -> set[date]:
+    """Дни rp5, в которые пропущен срок наблюдения за осадками: 12-часовые
+    записи за сутки есть, но у основного ряда их меньше двух (решение
+    пользователя 2026-10-12: такой день не пропущен и считается полным, сумма
+    — по тому, что есть, но пропуск срока показывается на экране).
+
+    Дни, за которые осадки есть в ГГ, не в счёт: их сумма взята из ГГ. Сутки
+    без 12-часовых записей (редкие tR = 24 или 6) тоже: срока основного ряда
+    в них нет по самому устройству записи, а не из-за пропуска."""
+    main = main_series(conn, wmo_index)
+    if main is None:
+        return set()
+    hour = cast(func.strftime("%H", rp5_readings.c.obs_time), Integer)
+    rows = conn.execute(
+        select(rp5_readings.c.obs_date, hour).where(
+            rp5_readings.c.wmo_index == wmo_index,
+            rp5_readings.c.RRR_precipitation.is_not(None),
+            rp5_readings.c.tR_precipitation_period == SERIES_PERIOD_HOURS,
+        )
+    ).all()
+    main_terms: Counter[date] = Counter()
+    for obs_date, obs_hour in rows:
+        main_terms[obs_date] += _series(int(obs_hour)) == main
+    from_gg = set(
+        conn.execute(
+            select(gg_readings.c.obs_date).where(
+                gg_readings.c.wmo_index == wmo_index, gg_readings.c.rrr_precipitation.is_not(None)
+            )
+        ).scalars()
+    )
+    return {day for day, count in main_terms.items() if count < TERMS_PER_DAY and day not in from_gg}
+
+
 def daily_sum(engine: Engine, wmo_index: int, day: date, main: int | None) -> tuple[float | None, str | None]:
     """Сумма осадков за сутки и файл, из которого она взята; (None, None) —
     данных об осадках за день нет. main — основной ряд сроков станции

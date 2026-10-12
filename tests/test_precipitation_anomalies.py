@@ -64,21 +64,27 @@ def test_seasons_in_range_lists_every_touched_season():
 # --- расчёт по базе ---
 
 
-def _gg_days(first: date, last: date, amount: float, skip: frozenset[date] = frozenset()) -> list[dict]:
+def _gg_days(first: date, last: date, amount: float, no_rain_data: frozenset[date] = frozenset()) -> list[dict]:
+    """Строки ГГ за каждый день; в дни no_rain_data осадки пусты (пропуск), а
+    температура есть."""
     rows = []
     day = first
     while day <= last:
-        if day not in skip:
-            rows.append({"wmo_index": STATION, "obs_date": day, "t_avg": 5.0, "t_min": 0.0, "t_max": 10.0,
-                         "rrr_precipitation": amount, "source_file": "gg.xlsx"})
+        rows.append({"wmo_index": STATION, "obs_date": day, "t_avg": 5.0, "t_min": 0.0, "t_max": 10.0,
+                     "rrr_precipitation": None if day in no_rain_data else amount, "source_file": "gg.xlsx"})
         day += timedelta(days=1)
     return rows
 
 
+# Четыре дня подряд без осадков: по правилу "3/5" (не больше 3 подряд) месяц неполный
+RAIN_GAP = frozenset(date(2020, 7, day) for day in (10, 11, 12, 13))
+
+
 @pytest.fixture(scope="module")
 def template_database(tmp_path_factory):
-    """Три года ГГ по 1 мм в день, в 2021 — по 2 мм; за 10 июля 2020 строки
-    нет вовсе: июль, лето и 2020 год для осадков неполные. Пересчёт трёх лет
+    """Три года ГГ по 1 мм в день, в 2021 — по 2 мм; 10–13 июля 2020 осадки
+    пусты: июль, лето и 2020 год для осадков неполные, для температуры —
+    полные. Пересчёт трёх лет
     по дням занимает секунды, поэтому база собирается один раз на модуль, а
     каждый тест получает её копию."""
     db_path = tmp_path_factory.mktemp("precipitation") / "template.sqlite3"
@@ -87,7 +93,7 @@ def template_database(tmp_path_factory):
     with engine.begin() as conn:
         conn.execute(gg_readings.insert(), [
             *_gg_days(date(2019, 1, 1), date(2019, 12, 31), 1.0),
-            *_gg_days(date(2020, 1, 1), date(2020, 12, 31), 1.0, skip=frozenset({date(2020, 7, 10)})),
+            *_gg_days(date(2020, 1, 1), date(2020, 12, 31), 1.0, no_rain_data=RAIN_GAP),
             *_gg_days(date(2021, 1, 1), date(2021, 12, 31), 2.0),
         ])
     recompute_range(engine, STATION, date(2019, 1, 1), date(2021, 12, 31))
@@ -123,7 +129,7 @@ def _value(engine, period_type: str, start: date, stat_type: str = "sum") -> flo
 def test_recompute_stores_season_sums_with_winter_across_two_years(engine):
     # зима 2020: декабрь 2019 (31) + январь (31) + февраль 2020 (29)
     assert _value(engine, "season", date(2019, 12, 1)) == 91.0
-    assert _value(engine, "season", date(2020, 6, 1)) == 91.0  # лето без 10 июля: 92 − 1
+    assert _value(engine, "season", date(2020, 6, 1)) == 88.0  # лето без 10–13 июля: 92 − 4
     # зима 2019 — только январь и февраль: декабря 2018 в базе нет
     assert _value(engine, "season", date(2018, 12, 1)) == 59.0
 
@@ -162,7 +168,34 @@ def test_archive_bounds_do_not_start_with_previous_december(engine):
     assert station_period_bounds(engine, STATION) == (date(2019, 1, 1), date(2021, 12, 31))
 
 
-def test_month_with_a_single_missing_day_is_incomplete_for_precipitation_but_complete_for_temperature(engine):
+@pytest.mark.parametrize(
+    ("missing", "complete"),
+    [
+        ((), True),
+        ((10,), True),  # до 2026-10-12 один пропущенный день делал месяц осадков неполным
+        ((3, 9, 15, 21, 27), True),  # 5 пропусков вразброс
+        ((3, 9, 15, 21, 27, 30), False),  # 6 пропусков
+        ((10, 11, 12, 13), False),  # 4 подряд
+    ],
+)
+def test_precipitation_month_completeness_follows_the_3_5_rule(missing, complete):
+    days = {date(2020, 7, day): 1.0 for day in range(1, 32) if day not in missing}
+
+    norms = compute_norms(PRECIPITATION, days, {(2020, 7): float(len(days))}, {})
+
+    assert ((2020, 7) in norms.complete_months) is complete
+
+
+def test_precipitation_decade_with_up_to_two_missing_days_is_complete():
+    days = {date(2020, 7, day): 1.0 for day in range(1, 32) if day not in (9, 10, 14, 15, 16)}
+
+    norms = compute_norms(PRECIPITATION, days, {(2020, 7): 26.0}, {})
+
+    # месяц полный (5 пропусков, не больше 3 подряд); первая декада — без 2 дней, вторая — без 3
+    assert set(norms.decades) == {(7, 1), (7, 21)}
+
+
+def test_precipitation_gap_makes_month_incomplete_for_precipitation_only(engine):
     recalculate_station(engine, STATION)
 
     rain = load_station_norms(engine, STATION, "R")
@@ -182,14 +215,15 @@ def test_precipitation_norms_are_means_of_complete_period_sums(engine):
     assert (norms.annual.first_year, norms.annual.last_year, norms.annual.year_count) == (2019, 2021, 2)
     assert norms.months[1] == pytest.approx((31 + 31 + 62) / 3)  # январь полный во все три года
     assert norms.months[7] == pytest.approx((31 + 62) / 2)  # июль 2020 неполный
-    assert norms.decades[(7, 1)] == pytest.approx((10 + 20) / 2)  # первая декада июля 2020 неполная
+    # декады июля 2020 в норму не идут: норма декады — по месяцам базы нормы, а июль неполный
+    assert norms.decades[(7, 1)] == pytest.approx((10 + 20) / 2)
 
 
 def test_season_norms_and_completeness(engine):
     recalculate_station(engine, STATION)
     norms = load_station_norms(engine, STATION, "R")
 
-    # зима 2019 без декабря 2018 и лето 2020 без 10 июля — неполные
+    # зима 2019 без декабря 2018 и лето 2020 без 10–13 июля — неполные
     assert date(2018, 12, 1) not in norms.complete_seasons
     assert date(2020, 6, 1) not in norms.complete_seasons
     assert date(2019, 12, 1) in norms.complete_seasons
@@ -207,7 +241,7 @@ def test_precipitation_anomalies_are_stored_in_millimetres_for_all_period_types(
     assert _value(engine, "decade", date(2021, 7, 1), STAT_ANOMALY) == pytest.approx(20 - norms.decades[(7, 1)])
     assert _value(engine, "season", date(2021, 6, 1), STAT_ANOMALY) == pytest.approx(184 - norms.seasons[6])
     # неполный период тоже получает отклонение — полнота хранится рядом
-    assert _value(engine, "month", date(2020, 7, 1), STAT_ANOMALY) == pytest.approx(30 - norms.months[7])
+    assert _value(engine, "month", date(2020, 7, 1), STAT_ANOMALY) == pytest.approx(27 - norms.months[7])
 
 
 def test_saved_norms_equal_computed_on_the_fly(engine):

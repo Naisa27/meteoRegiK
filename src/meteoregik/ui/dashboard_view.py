@@ -1,6 +1,10 @@
-"""Экран "Дашборд": две вкладки (корректировка 2026-10-10). "Исходные
-данные" — что залито и где пропуски, по всей базе
-(ui/dashboard_source_tab.py). Остальное в этом модуле — вкладка
+"""Экран "Дашборд": три вкладки. "Исходные данные" (корректировка
+2026-10-10) — что залито и где пропуски, по всей базе
+(ui/dashboard_source_tab.py). "Осадки" (корректировка 2026-10-11) —
+ui/dashboard_precip_tab.py; станция и период у неё общие с "Температурным
+режимом", поэтому фильтр стоит над вкладками, а данные обеих вкладок
+считаются одним фоновым расчётом (два расчёта разом оба пошли бы
+досчитывать нормы одной станции). Остальное в этом модуле — вкладка
 "Температурный режим", этап 1 (решение пользователя 2026-10-01, plan.md, "Экраны
 UI", п.4): одна станция + период -> сверху карточки-сводки, ниже теплокарта
 "год × месяц" и аномалии среднегодовой температуры с трендом. Только по уже
@@ -66,6 +70,8 @@ from meteoregik.reports.dashboard_data import (
     format_temperature,
     station_day_bounds,
 )
+from meteoregik.reports.precipitation_data import PrecipitationData, build_precipitation
+from meteoregik.reports.precipitation_data import station_day_bounds as precipitation_day_bounds
 from meteoregik.resources import DASHBOARD_ICON_PATH
 from meteoregik.stations.choices import load_stations_with_computed_indicators
 from meteoregik.ui import theme
@@ -77,6 +83,7 @@ from meteoregik.ui.dashboard_charts import (
     AnomalyChart,
     TemperatureHeatmap,
 )
+from meteoregik.ui.dashboard_precip_tab import PrecipitationTab
 from meteoregik.ui.dashboard_source_tab import SourceDataTab
 from meteoregik.ui.dashboard_widgets import (
     CardText,
@@ -94,6 +101,7 @@ from meteoregik.ui.station_combo import StationCombo
 
 _TITLE = "Дашборд"
 TAB_TEMPERATURE = "Температурный режим"
+TAB_PRECIPITATION = "Осадки"
 TAB_SOURCE = "Исходные данные"
 # Тёмно-синий текст переключателя теплокарты: 11.6:1 на белом
 HEATMAP_MODE_TEXT = "#1E3A6E"
@@ -495,6 +503,9 @@ def anomaly_note(data: DashboardData) -> str:
     return text
 
 
+_Loaded = tuple[DashboardData, PrecipitationData]
+
+
 @dataclass(frozen=True)
 class _AppliedFilter:
     wmo_index: int
@@ -528,6 +539,7 @@ class DashboardDialog(QDialog):
         if not choices:
             # Выбирать не из чего — подсказка "выберите станцию" вела бы в тупик
             self._hint.setText(NO_DATA_HINT)
+            self.precipitation_tab.set_hint(NO_DATA_HINT)
         if wmo_index is not None:
             self.station_combo.select_wmo(wmo_index)
             self._apply_filters()
@@ -539,12 +551,16 @@ class DashboardDialog(QDialog):
         layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(10)
 
-        # Две вкладки (корректировка 2026-10-10): всё прежнее содержимое —
-        # "Температурный режим" (станция + период), новая "Исходные данные" —
-        # по всей базе, поэтому фильтр живёт внутри первой вкладки, а не над обеими.
+        # Фильтр "станция + период" — над вкладками: он общий для
+        # "Температурного режима" и "Осадков". "Исходные данные" — по всей
+        # базе, на этой вкладке фильтр скрыт (_on_tab_changed).
+        self._filter_card = self._build_filter_card()
+        layout.addWidget(self._filter_card)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._build_temperature_tab(), TAB_TEMPERATURE)
+        self.precipitation_tab = PrecipitationTab(_START_HINT)
+        self.tabs.addTab(self.precipitation_tab, TAB_PRECIPITATION)
         self.source_tab = SourceDataTab(self.engine, run_async=self._run_async)
         self.tabs.addTab(self.source_tab, TAB_SOURCE)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -560,7 +576,9 @@ class DashboardDialog(QDialog):
         reserve_focus_width(self.apply_btn, close_btn)
 
     def _on_tab_changed(self, index: int) -> None:
-        if self.tabs.widget(index) is self.source_tab:
+        on_source = self.tabs.widget(index) is self.source_tab
+        self._filter_card.setVisible(not on_source)
+        if on_source:
             self.source_tab.ensure_loaded()
 
     def _build_temperature_tab(self) -> QWidget:
@@ -568,7 +586,6 @@ class DashboardDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(10)
-        layout.addWidget(self._build_filter_card())
 
         self._station_label = QLabel("")
         self._station_label.setStyleSheet("font-weight: 600; font-size: 14px;")
@@ -769,7 +786,7 @@ class DashboardDialog(QDialog):
             QMessageBox.warning(self, "Фильтр", "Начало периода позже его конца.")
             return
         if date_from is None or date_to is None:
-            bounds = station_day_bounds(self.engine, wmo_index)
+            bounds = self._archive_bounds(wmo_index)
             if bounds is None:
                 self._clear_results(f"{self.station_combo.currentText()}: посчитанных данных ещё нет.")
                 QMessageBox.information(self, _TITLE, "По этой станции ещё нет посчитанных данных.")
@@ -778,19 +795,31 @@ class DashboardDialog(QDialog):
 
         self._load(_AppliedFilter(wmo_index, date_from, date_to, self.station_combo.currentText()))
 
+    def _archive_bounds(self, wmo_index: int) -> tuple[date, date] | None:
+        """"Весь архив" станции — от первого до последнего дня с суточной
+        температурой или суммой осадков: период у вкладок общий."""
+        bounds = [
+            b for b in (station_day_bounds(self.engine, wmo_index), precipitation_day_bounds(self.engine, wmo_index))
+            if b is not None
+        ]
+        if not bounds:
+            return None
+        return min(first for first, _ in bounds), max(last for _, last in bounds)
+
     def _load(self, applied: _AppliedFilter) -> None:
         self._request_id += 1
         request_id = self._request_id
         self._set_loading(True)
 
-        def task() -> DashboardData:
-            return build_dashboard(self.engine, applied.wmo_index, applied.date_from, applied.date_to)
+        def task() -> _Loaded:
+            period = (applied.wmo_index, applied.date_from, applied.date_to)
+            return build_dashboard(self.engine, *period), build_precipitation(self.engine, *period)
 
-        def on_done(data: DashboardData) -> None:
+        def on_done(loaded: _Loaded) -> None:
             if request_id != self._request_id:
                 return
             self._set_loading(False)
-            self._show(applied, data)
+            self._show(applied, *loaded)
 
         def on_error(exc: BaseException) -> None:
             if request_id != self._request_id:
@@ -803,8 +832,8 @@ class DashboardDialog(QDialog):
 
     def _run(
         self,
-        task: Callable[[], DashboardData],
-        on_done: Callable[[DashboardData], None],
+        task: Callable[[], _Loaded],
+        on_done: Callable[[_Loaded], None],
         on_error: Callable[[BaseException], None],
     ) -> None:
         if self._run_async:
@@ -819,21 +848,28 @@ class DashboardDialog(QDialog):
 
     def _set_loading(self, loading: bool) -> None:
         self.loading_overlay.setVisible(loading)
+        self.precipitation_tab.set_loading(loading)
         self.apply_btn.setEnabled(not loading)
         if loading:
             self.loading_overlay.raise_()
 
-    def _show(self, applied: _AppliedFilter, data: DashboardData) -> None:
-        if not data.has_data:
-            self._clear_results(
-                f"{applied.station_title}: за период {_format_day(applied.date_from)}–"
-                f"{_format_day(applied.date_to)} данных не найдено."
+    def _show(self, applied: _AppliedFilter, data: DashboardData, rain: PrecipitationData) -> None:
+        period = f"{_format_day(applied.date_from)}–{_format_day(applied.date_to)}"
+        title = f"{applied.station_title} — {period}"
+        # У станции может быть температура без осадков и наоборот: пустая
+        # вкладка объясняет это сама, окно-сообщение — только если пусты обе.
+        if rain.has_data:
+            self.precipitation_tab.show_data(title, rain)
+        else:
+            self.precipitation_tab.clear_results(
+                f"{applied.station_title}: за период {period} данных об осадках не найдено."
             )
-            QMessageBox.information(self, _TITLE, "За выбранный период данных не найдено.")
+        if not data.has_data:
+            self._clear_temperature(f"{applied.station_title}: за период {period} данных не найдено.")
+            if not rain.has_data:
+                QMessageBox.information(self, _TITLE, "За выбранный период данных не найдено.")
             return
-        self._station_label.setText(
-            f"{applied.station_title} — {_format_day(applied.date_from)}–{_format_day(applied.date_to)}"
-        )
+        self._station_label.setText(title)
         for card, text in zip(self.cards, card_texts(data)):
             card.set_text(text)
         self._anomaly_title.setText(anomaly_title(data))
@@ -844,9 +880,13 @@ class DashboardDialog(QDialog):
         self.anomaly_chart.plot(data)
 
     def _clear_results(self, message: str) -> None:
-        """Убрать с экрана результаты прошлой выборки: карточки и графики от
-        другой станции/периода под новым фильтром вводили бы в заблуждение.
-        Вместо них — причина, почему пусто."""
+        """Убрать с экрана результаты прошлой выборки на обеих вкладках:
+        карточки и графики от другой станции/периода под новым фильтром
+        вводили бы в заблуждение. Вместо них — причина, почему пусто."""
+        self._clear_temperature(message)
+        self.precipitation_tab.clear_results(message)
+
+    def _clear_temperature(self, message: str) -> None:
         self._station_label.setText("")
         self._hint.setText(message)
         self._stack.setCurrentWidget(self._hint)
