@@ -1,7 +1,9 @@
 """Экран "Карта" (2026-10-10): станции на карте в трёх режимах —
-"Станции" (что залито: rp5 / ГГ / оба), "Показатель" (температурный
-показатель цветом и числом — за период или по шагам времени с ползунком) и
-"Полнота" (доля дней с данными цветом, длина архива размером кружка).
+"Станции" (что залито: rp5 / ГГ / оба), "Показатель" (показатель
+температуры или осадков цветом и числом — за период или по шагам времени с
+ползунком) и "Полнота" (доля дней с данными цветом, длина архива размером
+кружка). У кружка во всех режимах подписано название станции, значение —
+второй строкой под ним.
 Щелчок по станции — карточка с периодами и пропусками и переход в дашборд.
 
 Карта — страница static/map/map.html (Leaflet) в QWebEngineView. Не folium,
@@ -48,8 +50,9 @@ from PySide6.QtWidgets import (
 from sqlalchemy.engine import Engine
 
 from meteoregik.reports.map_data import (
-    INDICATOR_LABELS,
+    INDICATORS,
     MEAN,
+    PRECIP_SUM,
     STEP_MONTH,
     STEP_YEAR,
     MapData,
@@ -85,6 +88,9 @@ BASE_OSM, BASE_OUTLINE = "osm", "outline"
 # Пауза между шагами при проигрывании ползунка времени
 PLAY_INTERVAL_MS = 700
 WHOLE_ARCHIVE = "за весь архив каждой станции"
+# Сумма осадков без периода — не сумма за весь архив (архивы разной длины
+# несравнимы), а средняя годовая: reports/map_data.py
+WHOLE_ARCHIVE_PER_YEAR = "в среднем за год — по полным годам архива каждой станции"
 _USER_AGENT_SUFFIX = " meteoRegiK"
 
 MAP_QSS = f"""
@@ -311,7 +317,7 @@ class MapDialog(QDialog):
         top.addStretch(1)
         self.labels_check = QCheckBox("Подписи")
         self.labels_check.setChecked(True)
-        self.labels_check.setToolTip("Название станции или значение рядом с кружком")
+        self.labels_check.setToolTip("Название станции и значение под ним рядом с кружком")
         self.labels_check.toggled.connect(lambda on: self.canvas.call("setLabelsVisible", on))
         top.addWidget(self.labels_check)
         self.background_check = QCheckBox("Все станции справочника")
@@ -334,8 +340,13 @@ class MapDialog(QDialog):
         row.setSpacing(10)
         row.addWidget(QLabel("Показатель:"))
         self.indicator_combo = QComboBox()
-        for key, label in INDICATOR_LABELS.items():
-            self.indicator_combo.addItem(label, key)
+        rules = None
+        for key, info in INDICATORS.items():
+            # Черта между показателями температуры и осадков
+            if rules is not None and info.rules is not rules:
+                self.indicator_combo.insertSeparator(self.indicator_combo.count())
+            rules = info.rules
+            self.indicator_combo.addItem(info.label, key)
         self.indicator_combo.currentIndexChanged.connect(self._on_indicator_changed)
         row.addWidget(self.indicator_combo)
         self.time_combo = QComboBox()
@@ -521,7 +532,10 @@ class MapDialog(QDialog):
         if mode == MODE_FILL:
             return fill_layer(data)
         if self.time_mode == TIME_PERIOD:
-            title = f"{self._period[0]:%d.%m.%Y}–{self._period[1]:%d.%m.%Y}" if self._period else WHOLE_ARCHIVE
+            if self._period:
+                title = f"{self._period[0]:%d.%m.%Y}–{self._period[1]:%d.%m.%Y}"
+            else:
+                title = WHOLE_ARCHIVE_PER_YEAR if self.indicator == PRECIP_SUM else WHOLE_ARCHIVE
             numbers = [item.value for item in self._values.values() if item.value is not None]
             return indicator_layer(data, self.indicator, self._values, indicator_scale(self.indicator, numbers), title)
         if not self._steps:

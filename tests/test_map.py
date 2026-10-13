@@ -18,7 +18,11 @@ from meteoregik.reports.map_data import (
     MEAN,
     MINIMUM,
     NOTE_INCOMPLETE_YEAR,
+    NOTE_NO_COMPLETE_YEARS,
     NOTE_NO_DATA,
+    PRECIP_DAY_MAX,
+    PRECIP_PERCENT,
+    PRECIP_SUM,
     STEP_MONTH,
     STEP_YEAR,
     MapStation,
@@ -31,7 +35,9 @@ from meteoregik.reports.map_render import (
     DIVERGING_STOPS,
     FILL_SCALE,
     FORMAT_COLORS,
+    MAP_SUM_STOPS,
     MUTED_COLOR,
+    PERCENT_SCALE_MIN_HALF,
     ColorScale,
     background_points,
     fill_layer,
@@ -41,6 +47,7 @@ from meteoregik.reports.map_render import (
     station_name,
     stations_layer,
 )
+from meteoregik.reports.precipitation_data import PERCENT_STOPS, build_precipitation
 from meteoregik.ui.dashboard_view import DashboardDialog
 from meteoregik.ui.map_view import (
     BASE_OSM,
@@ -57,6 +64,9 @@ from meteoregik.ui.map_view import (
 
 WARM = 27707  # 2019 — 0 °C, 2020 — +2 °C, оба года полные
 COLD = 27704  # 2020 — −4 °C, с пропуском в январе (год неполный)
+# Осадки: у тёплой 2 мм в день в 2019 году (730 мм) и 1 мм в 2020-м, кроме
+# ливня 10 августа — 21 мм (386 мм за год); у холодной — 3 мм в день в 2020-м
+RAINY_DAY = date(2020, 8, 10)
 NO_COORDS = 11111
 
 
@@ -91,6 +101,28 @@ def _year_rows(wmo_index: int, year: int, avg: float, skip: set[date] = frozense
     return rows
 
 
+def _precip_rows(wmo_index: int, year: int, daily: float, skip: set[date] = frozenset()) -> list[dict]:
+    """Суточные суммы осадков года и суммы его месяцев и самого года — как
+    их сохраняет calculations/recompute.py."""
+    rows = []
+    months: dict[int, float] = {}
+    day = date(year, 1, 1)
+    while day.year == year:
+        if day not in skip:
+            value = 21.0 if (wmo_index, day) == (WARM, RAINY_DAY) else daily
+            months[day.month] = months.get(day.month, 0.0) + value
+            rows.append({"wmo_index": wmo_index, "period_type": "day", "period_start": day, "period_end": day,
+                         "parameter": "R", "stat_type": "sum", "value": value})
+        day += timedelta(days=1)
+    for month, total in months.items():
+        end = date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+        rows.append({"wmo_index": wmo_index, "period_type": "month", "period_start": date(year, month, 1),
+                     "period_end": end, "parameter": "R", "stat_type": "sum", "value": total})
+    rows.append({"wmo_index": wmo_index, "period_type": "year", "period_start": date(year, 1, 1),
+                 "period_end": date(year, 12, 31), "parameter": "R", "stat_type": "sum", "value": sum(months.values())})
+    return rows
+
+
 @pytest.fixture
 def engine(tmp_path):
     engine = get_engine(tmp_path / "test.sqlite3")
@@ -108,6 +140,9 @@ def engine(tmp_path):
             *_year_rows(WARM, 2020, 2.0),
             *_year_rows(COLD, 2020, -4.0, skip=january_gap),
             *_year_rows(NO_COORDS, 2020, 1.0),
+            *_precip_rows(WARM, 2019, 2.0),
+            *_precip_rows(WARM, 2020, 1.0),
+            *_precip_rows(COLD, 2020, 3.0, skip=january_gap),
         ])
         conn.execute(gg_readings.insert(), [
             {"wmo_index": wmo, "station_name": "x", "obs_date": date(2020, 1, 1), "t_avg": 1.0, "source_file": "f.xlsx"}
@@ -207,6 +242,78 @@ def test_anomaly_series_uses_station_norm(engine):
     assert steps[1].values[WARM].value == pytest.approx(1.0)
 
 
+# --- данные: осадки ---
+
+
+def test_precipitation_sum_for_period_and_mean_annual_for_whole_archive(engine):
+    data = fetch_map_data(engine)
+
+    year = period_values(engine, data, PRECIP_SUM, date(2019, 1, 1), date(2019, 12, 31))
+    assert year[WARM] == StationValue(730.0)
+    assert year[COLD] == StationValue(None, NOTE_NO_DATA)
+
+    # Без периода — не сумма за весь архив (1116 мм), а средняя годовая по полным годам
+    whole = period_values(engine, data, PRECIP_SUM)
+    assert whole[WARM].value == pytest.approx(558.0)
+    assert whole[WARM].note == "в среднем за год, полных лет — 2"
+    assert whole[COLD] == StationValue(None, NOTE_NO_COMPLETE_YEARS)  # в январе 2020 пропуск
+
+
+def test_precipitation_percent_matches_dashboard(engine):
+    """Процент нормы на карте — тот же, что на карточке вкладки "Осадки"."""
+    data = fetch_map_data(engine)
+    period = (date(2020, 3, 1), date(2020, 9, 15))
+
+    expected = build_precipitation(engine, WARM, *period).period_percent
+    assert expected is not None
+    assert period_values(engine, data, PRECIP_PERCENT, *period)[WARM].value == pytest.approx(expected)
+
+
+def test_precipitation_daily_maximum_carries_its_date(engine):
+    data = fetch_map_data(engine)
+
+    highest = period_values(engine, data, PRECIP_DAY_MAX)[WARM]
+    assert (highest.value, highest.note) == (21.0, "10.08.2020")
+
+
+def test_precipitation_year_series(engine):
+    data = fetch_map_data(engine)
+
+    sums = time_series(data, PRECIP_SUM, STEP_YEAR)
+    assert [step.label for step in sums] == ["2019", "2020"]
+    assert (sums[0].values[WARM].value, sums[1].values[WARM].value) == (730.0, 386.0)
+    assert sums[1].values[COLD] == StationValue(None, NOTE_INCOMPLETE_YEAR)
+
+    # Норма станции — средняя годовая сумма по её архиву, 558 мм
+    percents = time_series(data, PRECIP_PERCENT, STEP_YEAR)
+    assert percents[0].values[WARM].value == pytest.approx(730 / 558 * 100)
+    assert percents[1].values[WARM].value == pytest.approx(386 / 558 * 100)
+
+    # Суточный максимум полноты года не требует
+    maxima = time_series(data, PRECIP_DAY_MAX, STEP_YEAR)
+    assert (maxima[1].values[WARM].value, maxima[1].values[COLD].value) == (21.0, 3.0)
+
+
+def test_precipitation_month_series(engine):
+    data = fetch_map_data(engine)
+
+    maxima = time_series(data, PRECIP_DAY_MAX, STEP_MONTH)
+    assert (maxima[19].label, maxima[19].values[WARM].value) == ("Август 2020", 21.0)
+    sums = time_series(data, PRECIP_SUM, STEP_MONTH)
+    assert sums[12].values[COLD].value is None  # январь 2020 неполный
+    assert sums[13].values[COLD].value == pytest.approx(87.0)  # февраль: 29 дней по 3 мм
+
+
+def test_station_without_precipitation_stays_on_the_map_as_no_data(engine):
+    with engine.begin() as conn:
+        conn.execute(computed_indicators.insert(), _year_rows(22222, 2020, 5.0))
+    data = fetch_map_data(engine)
+
+    assert period_values(engine, data, PRECIP_SUM)[22222] == StationValue(None, NOTE_NO_DATA)
+    assert period_values(engine, data, PRECIP_DAY_MAX)[22222] == StationValue(None, NOTE_NO_DATA)
+    assert time_series(data, PRECIP_SUM, STEP_YEAR)[1].values[22222] == StationValue(None, NOTE_NO_DATA)
+
+
 def test_time_series_of_empty_database(tmp_path):
     engine = get_engine(tmp_path / "empty.sqlite3")
     run_migrations(engine)
@@ -242,6 +349,19 @@ def test_temperature_scale_spans_shown_values():
     assert scale.color(5.4) == DIVERGING_STOPS[0] and scale.color(5.9) == DIVERGING_STOPS[-1]
 
 
+def test_precipitation_scales():
+    sums = indicator_scale(PRECIP_SUM, [400.0, 700.0])
+    assert (sums.low, sums.high) == (400.0, 700.0)
+    assert sums.color(400.0) == MAP_SUM_STOPS[0] and sums.color(700.0) == MAP_SUM_STOPS[-1]
+
+    percents = indicator_scale(PRECIP_PERCENT, [80.0, 130.0])
+    assert (percents.low, percents.high) == (70.0, 130.0)  # симметрично вокруг 100 %
+    assert percents.color(100.0) == PERCENT_STOPS[3]
+    assert indicator_scale(PRECIP_PERCENT, [100.4]).high == 100 + PERCENT_SCALE_MIN_HALF
+    capped = indicator_scale(PRECIP_PERCENT, [60.0, 540.0])
+    assert (capped.low, capped.high) == (0.0, 200.0)  # выброс не сжимает шкалу
+
+
 def test_station_name_from_label():
     assert station_name("Сухиничи, Калужская область (27707)") == "Сухиничи"
     assert station_name("Ташкент (38457)") == "Ташкент"
@@ -268,21 +388,41 @@ def test_indicator_layer_labels_values_and_mutes_missing(engine):
     by_wmo = {m["wmo"]: m for m in layer.markers}
 
     assert set(by_wmo) == {WARM, COLD}
-    assert (by_wmo[WARM]["label"], by_wmo[WARM]["color"], by_wmo[WARM]["muted"]) == ("+2.0", scale.color(2.0), False)
+    # Название станции остаётся в подписи, значение — второй строкой
+    assert (by_wmo[WARM]["label"], by_wmo[WARM]["value"]) == ("Тёплая", "+2.0 °C")
+    assert (by_wmo[WARM]["color"], by_wmo[WARM]["muted"]) == (scale.color(2.0), False)
     assert by_wmo[WARM]["tip"] == "Тёплая (27707): +2.0 °C"
-    assert (by_wmo[COLD]["label"], by_wmo[COLD]["color"], by_wmo[COLD]["muted"]) == ("", MUTED_COLOR, True)
+    assert (by_wmo[COLD]["label"], by_wmo[COLD]["value"]) == ("Холодная", "")
+    assert (by_wmo[COLD]["color"], by_wmo[COLD]["muted"]) == (MUTED_COLOR, True)
     assert "неполный год" in by_wmo[COLD]["tip"]
     assert "Средняя температура, °C" in layer.legend and "2020" in layer.legend
     assert "значения нет" in layer.legend
+
+
+def test_precipitation_layer_writes_millimetres_and_percents(engine):
+    data = fetch_map_data(engine)
+
+    values = {WARM: StationValue(730.0)}
+    sums = indicator_layer(data, PRECIP_SUM, values, indicator_scale(PRECIP_SUM, [386.0, 730.0]), "2019")
+    assert (sums.markers[0]["label"], sums.markers[0]["value"]) == ("Тёплая", "730.0 мм")
+    assert "Сумма осадков, мм" in sums.legend and "386.0 мм" in sums.legend
+
+    values = {WARM: StationValue(130.8), COLD: StationValue(540.0)}
+    percents = indicator_layer(data, PRECIP_PERCENT, values, indicator_scale(PRECIP_PERCENT, [130.8, 540.0]), "2019")
+    by_wmo = {m["wmo"]: m for m in percents.markers}
+    assert by_wmo[WARM]["value"] == "131 %"
+    assert by_wmo[COLD]["color"] == PERCENT_STOPS[-1]  # выше предела шкалы — крайним цветом
+    assert "Осадки, % нормы" in percents.legend and "Осадки, % нормы, %" not in percents.legend
+    assert "≥ 200 %" in percents.legend and ">100<" in percents.legend
 
 
 def test_fill_layer_sizes_by_archive_length(engine):
     data = fetch_map_data(engine)
     by_wmo = {m["wmo"]: m for m in fill_layer(data).markers}
 
-    assert by_wmo[WARM]["label"] == "100 %"
+    assert (by_wmo[WARM]["label"], by_wmo[WARM]["value"]) == ("Тёплая", "100 %")
     assert by_wmo[WARM]["color"] == FILL_SCALE.color(1.0)
-    assert by_wmo[COLD]["label"] == "97 %"  # 356 из 366 дней
+    assert by_wmo[COLD]["value"] == "97 %"  # 356 из 366 дней
     assert by_wmo[WARM]["radius"] > by_wmo[COLD]["radius"]  # два года против одного
 
 
@@ -328,7 +468,9 @@ def test_indicator_mode_shows_values_without_refitting(engine):
 
     markers, fit = canvas.last("setMarkers")
     assert fit is False
-    assert {m["wmo"]: m["label"] for m in markers} == {WARM: "+1.0", COLD: "−4.0"}
+    assert {m["wmo"]: (m["label"], m["value"]) for m in markers} == {
+        WARM: ("Тёплая", "+1.0 °C"), COLD: ("Холодная", "−4.0 °C"),
+    }
     assert "за весь архив каждой станции" in canvas.last("setLegend")[0]
     assert not dialog._indicator_row.isHidden() and dialog._slider_box.isHidden()
 
@@ -345,8 +487,8 @@ def test_period_filter_applies_to_all_stations(engine, messages):
 
     dialog.date_to_edit.set_date(date(2019, 12, 31))
     dialog.apply_btn.click()
-    labels = {m["wmo"]: m["label"] for m in canvas.last("setMarkers")[0]}
-    assert labels == {WARM: "0.0", COLD: ""}
+    labels = {m["wmo"]: m["value"] for m in canvas.last("setMarkers")[0]}
+    assert labels == {WARM: "0.0 °C", COLD: ""}
     assert "01.01.2019–31.12.2019" in canvas.last("setLegend")[0]
 
 
@@ -364,10 +506,37 @@ def test_time_slider_steps_through_years_with_one_scale(engine):
     dialog.time_slider.setValue(0)
     assert dialog._step_label.text() == "2019"
     first_year = {m["wmo"]: m for m in canvas.last("setMarkers")[0]}
-    assert (first_year[WARM]["label"], last_year[WARM]["label"]) == ("0.0", "+2.0")
+    assert (first_year[WARM]["value"], last_year[WARM]["value"]) == ("0.0 °C", "+2.0 °C")
     # шкала общая на все годы: 0 °C — холодный край, +2 °C — тёплый
     assert first_year[WARM]["color"] == DIVERGING_STOPS[0]
     assert last_year[WARM]["color"] == DIVERGING_STOPS[-1]
+
+
+def test_precipitation_indicators_on_the_map(engine):
+    dialog, canvas = _dialog(engine)
+    dialog.mode.button(MODE_INDICATOR).setChecked(True)
+
+    dialog.indicator_combo.setCurrentIndex(dialog.indicator_combo.findData(PRECIP_SUM))
+    by_wmo = {m["wmo"]: m for m in canvas.last("setMarkers")[0]}
+    assert (by_wmo[WARM]["label"], by_wmo[WARM]["value"]) == ("Тёплая", "558.0 мм")
+    assert (by_wmo[COLD]["label"], by_wmo[COLD]["value"], by_wmo[COLD]["muted"]) == ("Холодная", "", True)
+    legend = canvas.last("setLegend")[0]
+    assert "Сумма осадков, мм" in legend and "в среднем за год" in legend
+
+    dialog.time_combo.setCurrentIndex(dialog.time_combo.findData(TIME_YEARS))
+    dialog.indicator_combo.setCurrentIndex(dialog.indicator_combo.findData(PRECIP_PERCENT))
+    assert dialog._step_label.text() == "2020"
+    by_wmo = {m["wmo"]: m for m in canvas.last("setMarkers")[0]}
+    assert by_wmo[WARM]["value"] == "69 %"  # 386 из 558 мм
+    assert "Осадки, % нормы" in canvas.last("setLegend")[0]
+
+
+def test_indicator_list_separates_temperature_from_precipitation(engine):
+    dialog, _ = _dialog(engine)
+    combo = dialog.indicator_combo
+
+    keys = [combo.itemData(index) for index in range(combo.count())]
+    assert keys == [MEAN, ANOMALY, MAXIMUM, MINIMUM, None, PRECIP_SUM, PRECIP_PERCENT, PRECIP_DAY_MAX]
 
 
 def test_play_walks_to_the_last_step_and_stops(engine):

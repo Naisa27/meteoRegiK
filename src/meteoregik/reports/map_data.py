@@ -1,8 +1,8 @@
 """Данные экрана "Карта" (2026-10-10): станции справочника с координатами,
-что по ним залито (reports/source_data.py) и значения температурных
-показателей по станциям — за период и по шагам времени (годы, месяцы) для
-ползунка. Qt-независимо; цвета, подписи и всплывающие карточки маркеров —
-в reports/map_render.py.
+что по ним залито (reports/source_data.py) и значения показателей
+температуры и осадков по станциям — за период и по шагам времени (годы,
+месяцы) для ползунка. Qt-независимо; цвета, подписи и всплывающие карточки
+маркеров — в reports/map_render.py.
 
 Нормы, полнота и отклонения берутся сохранённые (calculations/anomalies.py,
 решение пользователя 2026-10-10): перед чтением fetch_map_data досчитывает
@@ -10,7 +10,7 @@
 память не читаются — раньше карта держала их по всем станциям и считала
 всё сама, что на десятках станций стало бы заметной паузой:
 - ряды по годам и месяцам — готовые строки month/year из
-  computed_indicators (avg / min / max / anomaly) и period_completeness;
+  computed_indicators (avg / min / max / sum / anomaly) и period_completeness;
 - значение за произвольный период — агрегаты SQL по суточным строкам;
   отклонение — среднее (суточная − норма её месяца), то же определение, что
   у карточки дашборда, поэтому числа на карте и в дашборде совпадают.
@@ -20,19 +20,34 @@
 на карте ложно холодную станцию. Месяцы — только полные (правило ВМО "3/5").
 Абсолютные максимум и минимум — по тем дням, что есть: рекорд не становится
 неверным оттого, что в году есть пропуски.
+
+Осадки (корректировка 2026-10-11, этап 4) — три показателя:
+- сумма осадков: за заданный период — сумма суточных сумм; по годам и
+  месяцам — сохранённые суммы полных лет и месяцев. Без периода ("весь архив
+  каждой станции") — средняя годовая сумма по полным годам, а не сумма за
+  весь архив: архивы станций разной длины, и сумма за 60 лет рядом с суммой
+  за 20 показала бы на карте длину архива, а не осадки;
+- осадки в процентах нормы: за период — сумма к норме тех же дней (сумма
+  суточных долей месячных норм по дням с данными), то же определение, что у
+  карточки вкладки "Осадки" дашборда; по годам и месяцам — сумма к норме
+  года (месяца), только полные;
+- суточный максимум — по тем дням, что есть, как рекорды температуры.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from statistics import fmean
 
 from sqlalchemy import Integer, and_, cast, func, select
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.sql.elements import ColumnElement
 
-from meteoregik.calculations.anomalies import PARAMETER, STAT_ANOMALY, ensure_fresh
+from meteoregik.calculations.anomalies import PRECIPITATION, STAT_ANOMALY, TEMPERATURE, ParameterRules, ensure_fresh
 from meteoregik.db.schema import computed_indicators, period_completeness, ru_regions, station_norms, stations
 from meteoregik.reports.dashboard_data import MONTHS_NOMINATIVE
+from meteoregik.reports.precipitation_data import percent_of_norm
 from meteoregik.reports.source_data import SourceOverview, StationSourceRow, fetch_source_overview
 from meteoregik.stations.choices import _REGION_JOIN, StationChoice
 
@@ -40,11 +55,31 @@ MEAN = "mean"
 ANOMALY = "anomaly"
 MAXIMUM = "max"
 MINIMUM = "min"
-INDICATOR_LABELS: dict[str, str] = {
-    MEAN: "Средняя температура",
-    ANOMALY: "Отклонение от нормы",
-    MAXIMUM: "Абсолютный максимум",
-    MINIMUM: "Абсолютный минимум",
+PRECIP_SUM = "precip_sum"
+PRECIP_PERCENT = "precip_percent"
+PRECIP_DAY_MAX = "precip_day_max"
+
+
+@dataclass(frozen=True)
+class Indicator:
+    """Показатель карты: подпись в списке и легенде, параметр и вид числа."""
+
+    label: str
+    rules: ParameterRules
+    unit: str
+    signed: bool = False  # температура пишется со знаком: "+5.4"
+    digits: int = 1
+
+
+# Порядок — порядок в списке "Показатель": сначала температура, затем осадки
+INDICATORS: dict[str, Indicator] = {
+    MEAN: Indicator("Средняя температура", TEMPERATURE, "°C", signed=True),
+    ANOMALY: Indicator("Отклонение температуры от нормы", TEMPERATURE, "°C", signed=True),
+    MAXIMUM: Indicator("Абсолютный максимум температуры", TEMPERATURE, "°C", signed=True),
+    MINIMUM: Indicator("Абсолютный минимум температуры", TEMPERATURE, "°C", signed=True),
+    PRECIP_SUM: Indicator("Сумма осадков", PRECIPITATION, "мм"),
+    PRECIP_PERCENT: Indicator("Осадки, % нормы", PRECIPITATION, "%", digits=0),
+    PRECIP_DAY_MAX: Indicator("Суточный максимум осадков", PRECIPITATION, "мм"),
 }
 
 STEP_YEAR = "year"
@@ -54,6 +89,7 @@ NOTE_INCOMPLETE_YEAR = "неполный год"
 NOTE_INCOMPLETE_MONTH = "неполный месяц"
 NOTE_NO_DATA = "нет данных"
 NOTE_NO_NORM = "норма не рассчитана"
+NOTE_NO_COMPLETE_YEARS = "нет полных лет"
 
 
 @dataclass(frozen=True)
@@ -69,13 +105,19 @@ _StepKey = tuple[int, int]  # (год, месяц); у годового шага
 
 @dataclass
 class PeriodStats:
-    """Сохранённые значения станции за один месяц или год."""
+    """Сохранённые значения одного параметра станции за месяц или год. У
+    температуры — avg / min / max, у осадков — sum и max (наибольшая суточная
+    сумма периода)."""
 
     avg: float | None = None
     min: float | None = None
     max: float | None = None
+    sum: float | None = None
     anomaly: float | None = None
     complete: bool = False
+
+
+_Periods = dict[int, dict[_StepKey, PeriodStats]]
 
 
 @dataclass(frozen=True)
@@ -96,8 +138,9 @@ class TimeStep:
 class MapData:
     stations: list[MapStation] = field(default_factory=list)  # весь справочник с координатами
     sources: dict[int, StationSourceRow] = field(default_factory=dict)  # станции с залитыми данными
-    # Месячные и годовые значения станций с посчитанными данными
-    periods: dict[int, dict[_StepKey, PeriodStats]] = field(default_factory=dict)
+    # Месячные и годовые значения станций с посчитанными данными: температура и осадки
+    periods: _Periods = field(default_factory=dict)
+    precipitation: _Periods = field(default_factory=dict)
 
     @property
     def located(self) -> dict[int, MapStation]:
@@ -115,12 +158,17 @@ class MapData:
         без координат на карту не попадает, и её данные не должны влиять на
         то, что на карте: ни на шкалу цвета, ни на диапазон ползунка времени
         (иначе ползунок доходил бы до дат, за которые ни у одной видимой
-        станции ничего нет — корректировка 2026-10-10)."""
+        станции ничего нет — корректировка 2026-10-10). Список один для всех
+        показателей: станция с температурой, но без осадков остаётся на
+        карте осадков серым кружком "нет данных", а не исчезает."""
         located = self.located
-        return [wmo for wmo in self.periods if wmo in located]
+        return [wmo for wmo in {**self.periods, **self.precipitation} if wmo in located]
+
+    def periods_of(self, rules: ParameterRules) -> _Periods:
+        return self.precipitation if rules is PRECIPITATION else self.periods
 
 
-def _fetch_periods(engine: Engine) -> dict[int, dict[_StepKey, PeriodStats]]:
+def _fetch_periods(engine: Engine, rules: ParameterRules, stat_types: tuple[str, ...]) -> _Periods:
     values = select(
         computed_indicators.c.wmo_index,
         computed_indicators.c.period_type,
@@ -128,19 +176,23 @@ def _fetch_periods(engine: Engine) -> dict[int, dict[_StepKey, PeriodStats]]:
         computed_indicators.c.stat_type,
         computed_indicators.c.value,
     ).where(
-        computed_indicators.c.parameter == PARAMETER,
+        computed_indicators.c.parameter == rules.parameter,
         computed_indicators.c.period_type.in_(("month", "year")),
-        computed_indicators.c.stat_type.in_(("avg", "min", "max", STAT_ANOMALY)),
+        computed_indicators.c.stat_type.in_((*stat_types, STAT_ANOMALY)),
         computed_indicators.c.value.is_not(None),
     )
     complete = select(
         period_completeness.c.wmo_index, period_completeness.c.period_type, period_completeness.c.period_start
-    ).where(period_completeness.c.parameter == PARAMETER, period_completeness.c.complete.is_(True))
+    ).where(
+        period_completeness.c.parameter == rules.parameter,
+        period_completeness.c.period_type.in_(("month", "year")),
+        period_completeness.c.complete.is_(True),
+    )
 
     def key(period_type: str, start: date) -> _StepKey:
         return (start.year, start.month if period_type == "month" else 0)
 
-    result: dict[int, dict[_StepKey, PeriodStats]] = {}
+    result: _Periods = {}
     with engine.connect() as conn:
         for wmo, period_type, start, stat_type, value in conn.execute(values):
             stats = result.setdefault(wmo, {}).setdefault(key(period_type, start), PeriodStats())
@@ -150,6 +202,32 @@ def _fetch_periods(engine: Engine) -> dict[int, dict[_StepKey, PeriodStats]]:
             if stats is not None:
                 stats.complete = True
     return result
+
+
+def _add_daily_maxima(engine: Engine, periods: _Periods) -> None:
+    """Наибольшая суточная сумма осадков каждого месяца и года. В отличие
+    от температуры, у осадков максимум периода не хранится (у месяца и года —
+    только сумма), поэтому он берётся агрегатом по суточным строкам."""
+    days = computed_indicators.c
+    year = cast(func.strftime("%Y", days.period_start), Integer)
+    month = cast(func.strftime("%m", days.period_start), Integer)
+    stmt = (
+        select(days.wmo_index, year, month, func.max(days.value))
+        .where(
+            days.period_type == "day",
+            days.parameter == PRECIPITATION.parameter,
+            days.stat_type == PRECIPITATION.stat_type,
+            days.value.is_not(None),
+        )
+        .group_by(days.wmo_index, year, month)
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).all()
+    for wmo, year_number, month_number, value in rows:
+        station = periods.setdefault(wmo, {})
+        station.setdefault((year_number, month_number), PeriodStats()).max = value
+        yearly = station.setdefault((year_number, 0), PeriodStats())
+        yearly.max = value if yearly.max is None else max(yearly.max, value)
 
 
 def fetch_map_data(engine: Engine, overview: SourceOverview | None = None) -> MapData:
@@ -166,7 +244,14 @@ def fetch_map_data(engine: Engine, overview: SourceOverview | None = None) -> Ma
         ]
     located.sort(key=lambda station: station.label.casefold())
     overview = overview or fetch_source_overview(engine)
-    return MapData(located, {row.wmo_index: row for row in overview.stations}, _fetch_periods(engine))
+    precipitation = _fetch_periods(engine, PRECIPITATION, (PRECIPITATION.stat_type,))
+    _add_daily_maxima(engine, precipitation)
+    return MapData(
+        located,
+        {row.wmo_index: row for row in overview.stations},
+        _fetch_periods(engine, TEMPERATURE, ("avg", "min", "max")),
+        precipitation,
+    )
 
 
 # --- показатель за период ---
@@ -177,11 +262,13 @@ def _format_days(days: list[date]) -> str:
     return f"{text} и ещё {len(days) - 1} дн." if len(days) > 1 else text
 
 
-def _day_filter(stat_type: str, wmo_indexes: list[int], date_from: date | None, date_to: date | None) -> list:
+def _day_filter(
+    rules: ParameterRules, stat_type: str, wmo_indexes: list[int], date_from: date | None, date_to: date | None
+) -> list[ColumnElement[bool]]:
     days = computed_indicators.c
     conditions = [
         days.period_type == "day",
-        days.parameter == PARAMETER,
+        days.parameter == rules.parameter,
         days.stat_type == stat_type,
         days.value.is_not(None),
         days.wmo_index.in_(wmo_indexes),
@@ -189,6 +276,108 @@ def _day_filter(stat_type: str, wmo_indexes: list[int], date_from: date | None, 
     if date_from is not None and date_to is not None:
         conditions.append(days.period_start.between(date_from, date_to))
     return conditions
+
+
+def _norm_of_month(rules: ParameterRules) -> ColumnElement[bool]:
+    """Условие соединения суточной строки с нормой её календарного месяца."""
+    days = computed_indicators.c
+    return and_(
+        station_norms.c.wmo_index == days.wmo_index,
+        station_norms.c.parameter == rules.parameter,
+        station_norms.c.period_type == "month",
+        # period_start хранится в SQLite текстом "ГГГГ-ММ-ДД"
+        station_norms.c.month == cast(func.strftime("%m", days.period_start), Integer),
+    )
+
+
+def _temperature_means(
+    conn: Connection, where: list[ColumnElement[bool]], with_anomaly: bool
+) -> dict[int, StationValue]:
+    days = computed_indicators.c
+    means = dict(conn.execute(select(days.wmo_index, func.avg(days.value)).where(*where).group_by(days.wmo_index)).all())
+    if not with_anomaly:
+        return {wmo: StationValue(value) for wmo, value in means.items()}
+    anomalies = dict(
+        conn.execute(
+            select(days.wmo_index, func.avg(days.value - station_norms.c.value))
+            .select_from(computed_indicators.join(station_norms, _norm_of_month(TEMPERATURE)))
+            .where(*where)
+            .group_by(days.wmo_index)
+        ).all()
+    )
+    return {
+        wmo: StationValue(anomalies.get(wmo), "" if anomalies.get(wmo) is not None else NOTE_NO_NORM) for wmo in means
+    }
+
+
+def _precipitation_sums(
+    conn: Connection, where: list[ColumnElement[bool]], as_percent: bool
+) -> dict[int, StationValue]:
+    """Сумма осадков за период и она же в процентах нормы. Норма периода —
+    сумма суточных долей месячных норм (норма месяца / число дней в нём) по
+    дням с данными: дни без суммы не входят ни в сумму, ни в норму."""
+    days = computed_indicators.c
+    month_start = func.date(days.period_start, "start of month")
+    days_in_month = func.julianday(func.date(days.period_start, "start of month", "+1 month")) - func.julianday(
+        month_start
+    )
+    rows = conn.execute(
+        select(days.wmo_index, func.sum(days.value), func.sum(station_norms.c.value / days_in_month))
+        .select_from(computed_indicators.outerjoin(station_norms, _norm_of_month(PRECIPITATION)))
+        .where(*where)
+        .group_by(days.wmo_index)
+    ).all()
+    result: dict[int, StationValue] = {}
+    for wmo, total, norm in rows:
+        total = round(total, PRECIPITATION.digits)
+        if not as_percent:
+            result[wmo] = StationValue(total)
+            continue
+        percent = percent_of_norm(total, norm)
+        result[wmo] = StationValue(percent, "" if percent is not None else NOTE_NO_NORM)
+    return result
+
+
+def _mean_annual_sums(data: MapData, wmo_indexes: list[int]) -> dict[int, StationValue]:
+    """Средняя годовая сумма осадков по полным годам архива станции."""
+    result: dict[int, StationValue] = {}
+    for wmo in wmo_indexes:
+        periods = data.precipitation.get(wmo)
+        if not periods:
+            continue
+        sums = [
+            stats.sum for (_, month), stats in periods.items() if not month and stats.complete and stats.sum is not None
+        ]
+        if sums:
+            result[wmo] = StationValue(fmean(sums), f"в среднем за год, полных лет — {len(sums)}")
+        else:
+            result[wmo] = StationValue(None, NOTE_NO_COMPLETE_YEARS)
+    return result
+
+
+def _extremes(
+    conn: Connection, where: list[ColumnElement[bool]], highest: bool
+) -> dict[int, StationValue]:
+    """Наибольшее (наименьшее) суточное значение станции и дни, когда оно было."""
+    days = computed_indicators.c
+    best = func.max(days.value) if highest else func.min(days.value)
+    records = (
+        select(days.wmo_index.label("wmo_index"), best.label("value")).where(*where).group_by(days.wmo_index).subquery()
+    )
+    rows = conn.execute(
+        select(days.wmo_index, days.value, days.period_start)
+        .select_from(
+            computed_indicators.join(records, and_(records.c.wmo_index == days.wmo_index, records.c.value == days.value))
+        )
+        .where(*where)
+        .order_by(days.wmo_index, days.period_start)
+    ).all()
+    dates: dict[int, list[date]] = {}
+    values: dict[int, float] = {}
+    for wmo, value, day in rows:
+        values[wmo] = value
+        dates.setdefault(wmo, []).append(day)
+    return {wmo: StationValue(values[wmo], _format_days(dates[wmo])) for wmo in values}
 
 
 def period_values(
@@ -204,85 +393,59 @@ def period_values(
     result = {wmo: StationValue(None, NOTE_NO_DATA) for wmo in shown}
     if not shown:
         return result
-    days = computed_indicators.c
+    rules = INDICATORS[indicator].rules
+    if indicator == PRECIP_SUM and (date_from is None or date_to is None):
+        result.update(_mean_annual_sums(data, shown))
+        return result
     with engine.connect() as conn:
         if indicator in (MEAN, ANOMALY):
-            where = _day_filter("avg", shown, date_from, date_to)
-            means = dict(
-                conn.execute(select(days.wmo_index, func.avg(days.value)).where(*where).group_by(days.wmo_index)).all()
-            )
-            if indicator == MEAN:
-                result.update({wmo: StationValue(value) for wmo, value in means.items()})
-                return result
-            norm_of_month = and_(
-                station_norms.c.wmo_index == days.wmo_index,
-                station_norms.c.parameter == PARAMETER,
-                station_norms.c.period_type == "month",
-                # period_start хранится в SQLite текстом "ГГГГ-ММ-ДД"
-                station_norms.c.month == cast(func.strftime("%m", days.period_start), Integer),
-            )
-            anomalies = dict(
-                conn.execute(
-                    select(days.wmo_index, func.avg(days.value - station_norms.c.value))
-                    .select_from(computed_indicators.join(station_norms, norm_of_month))
-                    .where(*where)
-                    .group_by(days.wmo_index)
-                ).all()
-            )
-            for wmo in means:
-                anomaly = anomalies.get(wmo)
-                result[wmo] = StationValue(anomaly, "" if anomaly is not None else NOTE_NO_NORM)
-            return result
-
-        stat_type = "max" if indicator == MAXIMUM else "min"
-        where = _day_filter(stat_type, shown, date_from, date_to)
-        best = func.max(days.value) if indicator == MAXIMUM else func.min(days.value)
-        records = (
-            select(days.wmo_index.label("wmo_index"), best.label("value"))
-            .where(*where)
-            .group_by(days.wmo_index)
-            .subquery()
-        )
-        rows = conn.execute(
-            select(days.wmo_index, days.value, days.period_start)
-            .select_from(
-                computed_indicators.join(
-                    records, and_(records.c.wmo_index == days.wmo_index, records.c.value == days.value)
-                )
-            )
-            .where(*where)
-            .order_by(days.wmo_index, days.period_start)
-        ).all()
-    dates: dict[int, list[date]] = {}
-    values: dict[int, float] = {}
-    for wmo, value, day in rows:
-        values[wmo] = value
-        dates.setdefault(wmo, []).append(day)
-    result.update({wmo: StationValue(values[wmo], _format_days(dates[wmo])) for wmo in values})
+            where = _day_filter(rules, "avg", shown, date_from, date_to)
+            result.update(_temperature_means(conn, where, with_anomaly=indicator == ANOMALY))
+        elif indicator in (PRECIP_SUM, PRECIP_PERCENT):
+            where = _day_filter(rules, rules.stat_type, shown, date_from, date_to)
+            result.update(_precipitation_sums(conn, where, as_percent=indicator == PRECIP_PERCENT))
+        else:
+            stat_type = {MAXIMUM: "max", MINIMUM: "min", PRECIP_DAY_MAX: rules.stat_type}[indicator]
+            where = _day_filter(rules, stat_type, shown, date_from, date_to)
+            result.update(_extremes(conn, where, highest=indicator != MINIMUM))
     return result
 
 
 # --- показатель по шагам времени ---
 
+
+def _step_value(indicator: str, stats: PeriodStats, incomplete: str) -> StationValue | None:
+    """Значение показателя за месяц или год; None — у станции за этот шаг
+    ничего нет (на шкале времени шаг для неё пуст)."""
+    if indicator in (MAXIMUM, MINIMUM, PRECIP_DAY_MAX):
+        value = stats.min if indicator == MINIMUM else stats.max
+        return StationValue(value) if value is not None else None
+    base = stats.sum if INDICATORS[indicator].rules is PRECIPITATION else stats.avg
+    if base is None:
+        return None
+    if not stats.complete:
+        return StationValue(None, incomplete)
+    if indicator in (MEAN, PRECIP_SUM):
+        return StationValue(base)
+    if stats.anomaly is None:
+        return StationValue(None, NOTE_NO_NORM)
+    if indicator == ANOMALY:
+        return StationValue(stats.anomaly)
+    # Отклонение осадков хранится в мм: норма периода — сумма минус отклонение
+    percent = percent_of_norm(base, round(base - stats.anomaly, PRECIPITATION.digits))
+    return StationValue(percent, "" if percent is not None else NOTE_NO_NORM)
+
+
 def _station_steps(data: MapData, wmo_index: int, indicator: str, step: str) -> dict[_StepKey, StationValue]:
     monthly = step == STEP_MONTH
     incomplete = NOTE_INCOMPLETE_MONTH if monthly else NOTE_INCOMPLETE_YEAR
     result: dict[_StepKey, StationValue] = {}
-    for key, stats in data.periods[wmo_index].items():
+    for key, stats in data.periods_of(INDICATORS[indicator].rules).get(wmo_index, {}).items():
         if bool(key[1]) != monthly:
             continue
-        if indicator in (MAXIMUM, MINIMUM):
-            value = stats.max if indicator == MAXIMUM else stats.min
-            if value is not None:
-                result[key] = StationValue(value)
-        elif stats.avg is None:
-            continue
-        elif not stats.complete:
-            result[key] = StationValue(None, incomplete)
-        elif indicator == MEAN:
-            result[key] = StationValue(stats.avg)
-        else:
-            result[key] = StationValue(stats.anomaly, "" if stats.anomaly is not None else NOTE_NO_NORM)
+        value = _step_value(indicator, stats, incomplete)
+        if value is not None:
+            result[key] = value
     return result
 
 

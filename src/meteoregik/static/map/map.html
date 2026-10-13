@@ -30,6 +30,11 @@
     box-shadow: none; color: #26333a; font-size: 12px; font-weight: 600; padding: 1px 5px;
   }
   .leaflet-tooltip.val::before { display: none; }
+  /* Подпись маркера: название станции и под ним значение. Рядом со значением
+     название пишется обычным весом — жирным остаётся число, ради которого смотрят карту */
+  .leaflet-tooltip.val { line-height: 1.25; }
+  .leaflet-tooltip.val .name:not(:last-child) { font-weight: 400; }
+  .leaflet-tooltip.val .num { font-variant-numeric: tabular-nums; font-weight: 700; }
   .no-labels .leaflet-tooltip.val { display: none; }
   .leaflet-tooltip.tip { color: #26333a; font-size: 12px; }
   .pop { color: #26333a; font-size: 12px; min-width: 230px; }
@@ -157,7 +162,8 @@
     showBackground: function (visible) {
       if (visible) { backgroundLayer.addTo(map); } else { map.removeLayer(backgroundLayer); }
     },
-    // markers: [{lat, lon, color, radius, label, tip, popup, muted}, ...]
+    // markers: [{lat, lon, color, radius, label, value, tip, popup, muted}, ...]
+    // label — название станции, value — значение второй строкой (может быть пустым)
     setMarkers: function (markers, fit) {
       closeHover();
       var open = null;
@@ -171,8 +177,17 @@
         });
         marker.wmo = m.wmo;
         marker.bindPopup(m.popup, { maxWidth: 340 });
-        if (m.label) {
-          marker.bindTooltip(m.label, {
+        if (m.label || m.value) {
+          // Строки собираются узлами, а не HTML: название станции — текст из справочника
+          var caption = document.createElement('div');
+          [['name', m.label], ['num', m.value]].forEach(function (line) {
+            if (!line[1]) { return; }
+            var row = document.createElement('div');
+            row.className = line[0];
+            row.textContent = line[1];
+            caption.appendChild(row);
+          });
+          marker.bindTooltip(caption, {
             permanent: true, className: 'val', direction: 'right', offset: [m.radius + 2, 0], interactive: false
           });
         }

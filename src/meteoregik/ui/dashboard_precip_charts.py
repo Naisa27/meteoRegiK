@@ -28,6 +28,9 @@ from PySide6.QtWidgets import QWidget
 
 from meteoregik.reports.dashboard_data import MONTHS_GENITIVE, MONTHS_NOMINATIVE, MONTHS_SHORT, format_signed
 from meteoregik.reports.precipitation_data import (
+    PERCENT_SCALE_MAX,
+    PERCENT_STOPS,
+    SUM_STOPS,
     DecadeSum,
     MonthSum,
     PrecipitationData,
@@ -52,17 +55,13 @@ DRY = "#B9772A"  # охра: 3.6:1 на фоне окна
 WET = "#2A8C82"  # сине-зелёный: 3.9:1
 NORM_BAR = "#C3D2DB"  # столбики нормы — фон, на котором читается выбранный год
 SELECTED_YEAR = "#0B4A47"
-SUM_CMAP = LinearSegmentedColormap.from_list(
-    "meteoregik_rain", ["#f0efec", "#bfe0dc", "#5fb3aa", "#1f7f78", "#0b4a47"]
-).with_extremes(bad=theme.BG)
-PERCENT_CMAP = LinearSegmentedColormap.from_list(
-    "meteoregik_dry_wet", ["#5e3a08", "#b9772a", "#e6c995", "#f0efec", "#9fd3cc", "#2a8c82", "#0b4a47"]
-).with_extremes(bad=theme.BG)
+SUM_CMAP = LinearSegmentedColormap.from_list("meteoregik_rain", list(SUM_STOPS)).with_extremes(bad=theme.BG)
+PERCENT_CMAP = LinearSegmentedColormap.from_list("meteoregik_dry_wet", list(PERCENT_STOPS)).with_extremes(
+    bad=theme.BG
+)
 
 HEATMAP_PERCENT = "percent"
 HEATMAP_SUM = "sum"
-# Предел шкалы "% нормы": всё, что выше, — самым тёмным цветом
-PERCENT_SCALE_MAX = 200.0
 
 _HATCH = "////"
 

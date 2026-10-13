@@ -14,9 +14,18 @@
   показанных станций: с серединой в 0 °C станции со средними +5.4 и +5.9
   были бы одного цвета, а карта нужна, чтобы их сравнить. Для ползунка
   времени шкала одна на все шаги — иначе цвет нельзя сравнивать между годами.
+- Осадки (этап 4, 2026-10-13): сумма и суточный максимум — величина, один
+  тон "светлый → тёмный" от минимума до максимума среди показанных станций;
+  процент нормы — полярность, расходящаяся шкала "сухо (охра) ↔ влажно
+  (сине-зелёный)" с серединой в 100 %. Цвета те же, что у теплокарты вкладки
+  "Осадки" дашборда (reports/precipitation_data.py).
 - "Полнота": доля дней с данными — величина, один тон "светлый → тёмный".
   Размер кружка — длина архива.
-Рядом с маркером подписано число: цвет читается только вместе с ним.
+
+Подпись у маркера (корректировка 2026-10-11): во всех режимах — название
+станции (label), а значение показателя или полноты — второй строкой под ним
+(value). Раньше в режимах "Показатель" и "Полнота" число заменяло название,
+и было не понять, чья это станция. Цвет читается только вместе с числом.
 """
 
 from __future__ import annotations
@@ -27,7 +36,15 @@ from html import escape
 from typing import Any
 
 from meteoregik.reports.dashboard_data import format_signed
-from meteoregik.reports.map_data import ANOMALY, INDICATOR_LABELS, MapData, MapStation, StationValue
+from meteoregik.reports.map_data import (
+    ANOMALY,
+    INDICATORS,
+    PRECIP_PERCENT,
+    MapData,
+    MapStation,
+    StationValue,
+)
+from meteoregik.reports.precipitation_data import PERCENT_SCALE_MAX, PERCENT_STOPS, SUM_STOPS
 from meteoregik.reports.source_data import FORMAT_GG, FORMAT_RP5, StationSourceRow, format_share
 
 DIVERGING_STOPS = ("#0d366b", "#256abf", "#86b6ef", "#f0efec", "#f2a39a", "#e34948", "#8c1d1c")
@@ -42,6 +59,9 @@ FORMAT_TITLES = {
     (FORMAT_GG,): "только ГГ",
     (FORMAT_RP5, FORMAT_GG): "rp5 и ГГ",
 }
+# Суммы осадков — без самого светлого цвета теплокарты: почти белый кружок с
+# белой обводкой на светлой подложке не виден (в теплокарте это фон ячейки)
+MAP_SUM_STOPS = SUM_STOPS[1:]
 MUTED_COLOR = "#aab4bb"  # станция есть, значения нет
 # Доля дней с данными ниже этой красится одинаково — самым светлым: почти
 # все станции лежат в 80–100 %, и шкала от нуля сделала бы их неразличимыми
@@ -84,6 +104,10 @@ class ColorScale:
 FILL_SCALE = ColorScale(FILL_STOPS, FILL_SCALE_FLOOR, 1.0)
 
 
+# Шкала "% нормы" не уже 100 ± 10 %: иначе разница в доли процента красилась бы как крайняя
+PERCENT_SCALE_MIN_HALF = 10.0
+
+
 def indicator_scale(indicator: str, values: Iterable[float]) -> ColorScale:
     numbers = list(values)
     if indicator == ANOMALY:
@@ -91,9 +115,23 @@ def indicator_scale(indicator: str, values: Iterable[float]) -> ColorScale:
         half = max((abs(v) for v in numbers), default=0.0)
         half = max(half, 0.5)
         return ColorScale(DIVERGING_STOPS, -half, half)
+    if indicator == PRECIP_PERCENT:
+        # Симметрично вокруг 100 % и не шире 0–200 %: один сухой месяц с
+        # 500 % нормы иначе сжал бы все остальные станции в один цвет
+        half = max((abs(v - 100) for v in numbers), default=0.0)
+        half = min(max(half, PERCENT_SCALE_MIN_HALF), PERCENT_SCALE_MAX - 100)
+        return ColorScale(PERCENT_STOPS, 100 - half, 100 + half)
+    stops = DIVERGING_STOPS if INDICATORS[indicator].signed else MAP_SUM_STOPS
     if not numbers:
-        return ColorScale(DIVERGING_STOPS, 0.0, 0.0)
-    return ColorScale(DIVERGING_STOPS, min(numbers), max(numbers))
+        return ColorScale(stops, 0.0, 0.0)
+    return ColorScale(stops, min(numbers), max(numbers))
+
+
+def format_value(indicator: str, value: float) -> str:
+    """Число показателя с единицей — так оно пишется у маркера, в карточке и в легенде."""
+    info = INDICATORS[indicator]
+    text = format_signed(value, info.digits) if info.signed else f"{value:.{info.digits}f}"
+    return f"{text} {info.unit}"
 
 
 def station_name(label: str) -> str:
@@ -178,7 +216,7 @@ def stations_layer(data: MapData) -> MapLayer:
             continue
         used.add(row.formats)
         markers.append(_marker(
-            station, color=FORMAT_COLORS[row.formats], radius=RADIUS, label=station_name(station.label),
+            station, color=FORMAT_COLORS[row.formats], radius=RADIUS, label=station_name(station.label), value="",
             tip=f"{station.label}: {FORMAT_TITLES[row.formats]}", popup=popup_html(station, row), muted=False,
         ))
     body = "".join(_swatch(color, FORMAT_TITLES[key]) for key, color in FORMAT_COLORS.items() if key in used)
@@ -194,33 +232,40 @@ def indicator_layer(
     period_title: str,
 ) -> MapLayer:
     located = data.located
-    title = INDICATOR_LABELS[indicator]
+    info = INDICATORS[indicator]
+    title = info.label
     markers = []
     any_muted = False
     for wmo, item in values.items():
         station = located.get(wmo)
         if station is None:
             continue
+        name = station_name(station.label)
         if item.value is None:
             any_muted = True
             text = item.note or "нет значения"
             markers.append(_marker(
-                station, color=MUTED_COLOR, radius=RADIUS - 2, label="", tip=f"{station.label}: {text}",
+                station, color=MUTED_COLOR, radius=RADIUS - 2, label=name, value="", tip=f"{station.label}: {text}",
                 popup=popup_html(station, data.sources.get(wmo), (title, text)), muted=True,
             ))
             continue
-        number = f"{format_signed(item.value)} °C"
+        number = format_value(indicator, item.value)
         detail = f"{number} ({item.note})" if item.note else number
         markers.append(_marker(
-            station, color=scale.color(item.value), radius=RADIUS, label=format_signed(item.value),
+            station, color=scale.color(item.value), radius=RADIUS, label=name, value=number,
             tip=f"{station.label}: {detail}", popup=popup_html(station, data.sources.get(wmo), (title, detail)),
             muted=False,
         ))
-    middle = "0" if indicator == ANOMALY else ""
-    body = _gradient(scale, f"{format_signed(scale.low)} °C", f"{format_signed(scale.high)} °C", middle)
+    middle = {ANOMALY: "0", PRECIP_PERCENT: "100"}.get(indicator, "")
+    high = format_value(indicator, scale.high)
+    if indicator == PRECIP_PERCENT and scale.high >= PERCENT_SCALE_MAX:
+        high = f"≥ {high}"  # шкала обрезана: всё, что выше, — крайним цветом
+    body = _gradient(scale, format_value(indicator, scale.low), high, middle)
     if any_muted:
         body += _swatch(MUTED_COLOR, "значения нет")
-    return MapLayer(markers, _legend(f"{title}, °C", body, period_title))
+    # У процента единица уже есть в названии показателя ("Осадки, % нормы")
+    legend_title = title if indicator == PRECIP_PERCENT else f"{title}, {info.unit}"
+    return MapLayer(markers, _legend(legend_title, body, period_title))
 
 
 def fill_layer(data: MapData) -> MapLayer:
@@ -233,7 +278,7 @@ def fill_layer(data: MapData) -> MapLayer:
         if not row.days_total:
             any_muted = True
             markers.append(_marker(
-                station, color=MUTED_COLOR, radius=RADIUS_MIN, label="",
+                station, color=MUTED_COLOR, radius=RADIUS_MIN, label=station_name(station.label), value="",
                 tip=f"{station.label}: суточные значения не посчитаны", popup=popup_html(station, row), muted=True,
             ))
             continue
@@ -244,8 +289,8 @@ def fill_layer(data: MapData) -> MapLayer:
         text = format_share(share)
         detail = f"{text} дней с данными, архив {years:.0f} лет" if years >= 1 else f"{text} дней с данными"
         markers.append(_marker(
-            station, color=FILL_SCALE.color(share), radius=round(radius, 1), label=text,
-            tip=f"{station.label}: {detail}", popup=popup_html(station, row, ("Полнота", detail)), muted=False,
+            station, color=FILL_SCALE.color(share), radius=round(radius, 1), label=station_name(station.label),
+            value=text, tip=f"{station.label}: {detail}", popup=popup_html(station, row, ("Полнота", detail)), muted=False,
         ))
     body = _gradient(FILL_SCALE, f"≤ {FILL_SCALE_FLOOR:.0%}".replace("%", " %"), "100 %")
     if any_muted:
