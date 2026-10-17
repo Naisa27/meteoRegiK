@@ -110,10 +110,13 @@ HELP_SUM = (
     "Сумма суточных сумм осадков за все дни периода, за которые есть данные. Если "
     "период не выбран, берётся весь архив станции. "
     + _DAILY_SUM
-    + "\n\nСравнение с нормой: для каждого дня с данными берётся его доля месячной "
-    "нормы (норма месяца, делённая на число дней в нём), доли складываются — это "
-    "норма для выбранного периода, она указана в скобках. Дни без данных не входят "
-    "ни в сумму, ни в норму, поэтому пропуски процент не занижают.\n\n"
+    + "\n\nСравнение с нормой — только по дням полных месяцев периода (не больше 5 "
+    "пропущенных дней в месяце и не больше 3 подряд): для каждого такого дня берётся "
+    "его доля месячной нормы (норма месяца, делённая на число дней в нём), доли "
+    "складываются — это норма для выбранного периода, она указана в скобках. Неполные "
+    "месяцы в сравнение не входят: в ранних выгрузках rp5 сухие дни часто не записаны, "
+    "и такой месяц выглядел бы влажнее, чем был. Если в сравнение вошли не все дни "
+    "периода с данными, это написано под процентом.\n\n"
     + _NORM_WHAT
     + "\n\n"
     + _NORM_FALLBACK
@@ -209,6 +212,22 @@ def _compared(value: float, norm: float | None, percent: float | None, norm_name
     return f"{describe_percent(percent, norm_name)} ({format_signed(value - norm)} мм; {format_mm(norm)})"
 
 
+def _period_compared(data: PrecipitationData) -> str:
+    """Сравнение суммы периода с нормой — по дням полных месяцев (см.
+    reports/precipitation_data.py); если вошли не все дни, это сказано."""
+    if not data.month_norms:
+        return "норма не рассчитана"
+    if data.compared_sum is None:
+        return "нет полных месяцев — с нормой не сравнить"
+    text = _compared(data.compared_sum, data.period_norm, data.period_percent, _norm_name(data))
+    if data.compared_days < data.days_with_data:
+        text += (
+            f"\nсравнение — по полным месяцам: {format_mm(data.compared_sum)} "
+            f"за {format_count(data.compared_days)} дн."
+        )
+    return text
+
+
 def _decade_norm_name(data: PrecipitationData, record: DecadeSum) -> str:
     """"нормы 2-й декады июля" / "средней 2-й декады июля по архиву"."""
     name = f"{record.number}-й декады {MONTHS_GENITIVE[record.start.month - 1]}"
@@ -227,10 +246,7 @@ def card_texts(data: PrecipitationData) -> list[CardText]:
     if data.period_sum is None:
         total = CardText(caption, _NO_VALUE, "нет суточных сумм в периоде")
     else:
-        total = CardText(
-            caption, format_mm(data.period_sum),
-            _compared(data.period_sum, data.period_norm, data.period_percent, _norm_name(data)),
-        )
+        total = CardText(caption, format_mm(data.period_sum), _period_compared(data))
 
     def year(caption: str, records: tuple[YearSum, ...]) -> CardText:
         if not records:

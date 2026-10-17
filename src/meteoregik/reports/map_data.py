@@ -27,10 +27,12 @@
   каждой станции") — средняя годовая сумма по полным годам, а не сумма за
   весь архив: архивы станций разной длины, и сумма за 60 лет рядом с суммой
   за 20 показала бы на карте длину архива, а не осадки;
-- осадки в процентах нормы: за период — сумма к норме тех же дней (сумма
-  суточных долей месячных норм по дням с данными), то же определение, что у
-  карточки вкладки "Осадки" дашборда; по годам и месяцам — сумма к норме
-  года (месяца), только полные;
+- осадки в процентах нормы: за период — сумма дней ПОЛНЫХ месяцев периода к
+  норме тех же дней (сумма суточных долей месячных норм), то же определение,
+  что у карточки вкладки "Осадки" дашборда (решение пользователя 2026-10-17:
+  неполные месяцы ранних лет rp5 без записанных сухих дней завышали процент);
+  без периода — средний процент по полным годам архива, как и сумма; по
+  годам и месяцам — сумма к норме года (месяца), только полные;
 - суточный максимум — по тем дням, что есть, как рекорды температуры.
 """
 
@@ -90,6 +92,7 @@ NOTE_INCOMPLETE_MONTH = "неполный месяц"
 NOTE_NO_DATA = "нет данных"
 NOTE_NO_NORM = "норма не рассчитана"
 NOTE_NO_COMPLETE_YEARS = "нет полных лет"
+NOTE_NO_COMPLETE_MONTHS = "нет полных месяцев"
 
 
 @dataclass(frozen=True)
@@ -310,48 +313,103 @@ def _temperature_means(
     }
 
 
-def _precipitation_sums(
-    conn: Connection, where: list[ColumnElement[bool]], as_percent: bool
-) -> dict[int, StationValue]:
-    """Сумма осадков за период и она же в процентах нормы. Норма периода —
-    сумма суточных долей месячных норм (норма месяца / число дней в нём) по
-    дням с данными: дни без суммы не входят ни в сумму, ни в норму."""
+def _precipitation_sums(conn: Connection, where: list[ColumnElement[bool]]) -> dict[int, StationValue]:
+    """Сумма осадков за период — по всем дням с данными."""
     days = computed_indicators.c
+    rows = conn.execute(select(days.wmo_index, func.sum(days.value)).where(*where).group_by(days.wmo_index)).all()
+    return {wmo: StationValue(round(total, PRECIPITATION.digits)) for wmo, total in rows}
+
+
+def _precipitation_percents(conn: Connection, where: list[ColumnElement[bool]]) -> dict[int, StationValue]:
+    """Осадки за период в процентах нормы — по дням полных месяцев: их сумма к
+    сумме их суточных долей месячных норм (норма месяца / число дней в нём).
+    Станция с данными, но без полных месяцев в периоде, получает пометку."""
+    days = computed_indicators.c
+    months = period_completeness.c
     month_start = func.date(days.period_start, "start of month")
     days_in_month = func.julianday(func.date(days.period_start, "start of month", "+1 month")) - func.julianday(
         month_start
     )
+    complete_month = and_(
+        months.wmo_index == days.wmo_index,
+        months.parameter == PRECIPITATION.parameter,
+        months.period_type == "month",
+        months.period_start == month_start,
+        months.complete.is_(True),
+    )
     rows = conn.execute(
         select(days.wmo_index, func.sum(days.value), func.sum(station_norms.c.value / days_in_month))
-        .select_from(computed_indicators.outerjoin(station_norms, _norm_of_month(PRECIPITATION)))
+        .select_from(
+            computed_indicators.join(period_completeness, complete_month).join(
+                station_norms, _norm_of_month(PRECIPITATION)
+            )
+        )
         .where(*where)
         .group_by(days.wmo_index)
     ).all()
-    result: dict[int, StationValue] = {}
+    present = conn.execute(select(days.wmo_index).where(*where).distinct()).scalars().all()
+    norms = set(conn.execute(
+        select(station_norms.c.wmo_index).where(
+            station_norms.c.parameter == PRECIPITATION.parameter, station_norms.c.period_type == "month"
+        ).distinct()
+    ).scalars())
+    result = {
+        wmo: StationValue(None, NOTE_NO_COMPLETE_MONTHS if wmo in norms else NOTE_NO_NORM) for wmo in present
+    }
     for wmo, total, norm in rows:
-        total = round(total, PRECIPITATION.digits)
-        if not as_percent:
-            result[wmo] = StationValue(total)
-            continue
-        percent = percent_of_norm(total, norm)
+        percent = percent_of_norm(round(total, PRECIPITATION.digits), norm)
         result[wmo] = StationValue(percent, "" if percent is not None else NOTE_NO_NORM)
     return result
+
+
+def _complete_years(data: MapData, wmo: int) -> list[PeriodStats]:
+    return [
+        stats
+        for (_, month), stats in data.precipitation.get(wmo, {}).items()
+        if not month and stats.complete and stats.sum is not None
+    ]
+
+
+def _years_note(count: int) -> str:
+    return f"полных лет — {count}"
 
 
 def _mean_annual_sums(data: MapData, wmo_indexes: list[int]) -> dict[int, StationValue]:
     """Средняя годовая сумма осадков по полным годам архива станции."""
     result: dict[int, StationValue] = {}
     for wmo in wmo_indexes:
-        periods = data.precipitation.get(wmo)
-        if not periods:
+        if wmo not in data.precipitation:
             continue
-        sums = [
-            stats.sum for (_, month), stats in periods.items() if not month and stats.complete and stats.sum is not None
-        ]
+        sums = [stats.sum for stats in _complete_years(data, wmo) if stats.sum is not None]
         if sums:
-            result[wmo] = StationValue(fmean(sums), f"в среднем за год, полных лет — {len(sums)}")
+            result[wmo] = StationValue(fmean(sums), _years_note(len(sums)))
         else:
             result[wmo] = StationValue(None, NOTE_NO_COMPLETE_YEARS)
+    return result
+
+
+def _mean_annual_percents(data: MapData, wmo_indexes: list[int]) -> dict[int, StationValue]:
+    """Средний по полным годам архива процент годовой нормы. Отклонение
+    осадков хранится в мм: норма года — сумма минус отклонение."""
+    result: dict[int, StationValue] = {}
+    for wmo in wmo_indexes:
+        if wmo not in data.precipitation:
+            continue
+        years = _complete_years(data, wmo)
+        if not years:
+            result[wmo] = StationValue(None, NOTE_NO_COMPLETE_YEARS)
+            continue
+        percents = [
+            percent
+            for stats in years
+            if stats.sum is not None and stats.anomaly is not None
+            and (percent := percent_of_norm(stats.sum, round(stats.sum - stats.anomaly, PRECIPITATION.digits)))
+            is not None
+        ]
+        if percents:
+            result[wmo] = StationValue(fmean(percents), _years_note(len(percents)))
+        else:
+            result[wmo] = StationValue(None, NOTE_NO_NORM)
     return result
 
 
@@ -394,8 +452,10 @@ def period_values(
     if not shown:
         return result
     rules = INDICATORS[indicator].rules
-    if indicator == PRECIP_SUM and (date_from is None or date_to is None):
-        result.update(_mean_annual_sums(data, shown))
+    if indicator in (PRECIP_SUM, PRECIP_PERCENT) and (date_from is None or date_to is None):
+        # Без периода — в среднем за год: архивы станций разной длины
+        mean_annual = _mean_annual_sums if indicator == PRECIP_SUM else _mean_annual_percents
+        result.update(mean_annual(data, shown))
         return result
     with engine.connect() as conn:
         if indicator in (MEAN, ANOMALY):
@@ -403,7 +463,9 @@ def period_values(
             result.update(_temperature_means(conn, where, with_anomaly=indicator == ANOMALY))
         elif indicator in (PRECIP_SUM, PRECIP_PERCENT):
             where = _day_filter(rules, rules.stat_type, shown, date_from, date_to)
-            result.update(_precipitation_sums(conn, where, as_percent=indicator == PRECIP_PERCENT))
+            result.update(
+                _precipitation_sums(conn, where) if indicator == PRECIP_SUM else _precipitation_percents(conn, where)
+            )
         else:
             stat_type = {MAXIMUM: "max", MINIMUM: "min", PRECIP_DAY_MAX: rules.stat_type}[indicator]
             where = _day_filter(rules, stat_type, shown, date_from, date_to)

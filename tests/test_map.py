@@ -18,6 +18,7 @@ from meteoregik.reports.map_data import (
     MEAN,
     MINIMUM,
     NOTE_INCOMPLETE_YEAR,
+    NOTE_NO_COMPLETE_MONTHS,
     NOTE_NO_COMPLETE_YEARS,
     NOTE_NO_DATA,
     PRECIP_DAY_MAX,
@@ -36,8 +37,13 @@ from meteoregik.reports.map_render import (
     FILL_SCALE,
     FORMAT_COLORS,
     MAP_SUM_STOPS,
+    INDICATOR_DESCRIPTIONS,
     MUTED_COLOR,
     PERCENT_SCALE_MIN_HALF,
+    SCOPE_ARCHIVE,
+    SCOPE_MONTH,
+    SCOPE_PERIOD,
+    SCOPE_YEAR,
     ColorScale,
     background_points,
     fill_layer,
@@ -48,7 +54,7 @@ from meteoregik.reports.map_render import (
     stations_layer,
 )
 from meteoregik.reports.precipitation_data import PERCENT_STOPS, build_precipitation
-from meteoregik.ui.dashboard_view import DashboardDialog
+from meteoregik.ui.dashboard_view import TAB_PRECIPITATION, TAB_TEMPERATURE, DashboardDialog
 from meteoregik.ui.map_view import (
     BASE_OSM,
     BASE_OUTLINE,
@@ -255,7 +261,7 @@ def test_precipitation_sum_for_period_and_mean_annual_for_whole_archive(engine):
     # Без периода — не сумма за весь архив (1116 мм), а средняя годовая по полным годам
     whole = period_values(engine, data, PRECIP_SUM)
     assert whole[WARM].value == pytest.approx(558.0)
-    assert whole[WARM].note == "в среднем за год, полных лет — 2"
+    assert whole[WARM].note == "полных лет — 2"  # "в среднем за год" — приписка периода (map_render)
     assert whole[COLD] == StationValue(None, NOTE_NO_COMPLETE_YEARS)  # в январе 2020 пропуск
 
 
@@ -267,6 +273,32 @@ def test_precipitation_percent_matches_dashboard(engine):
     expected = build_precipitation(engine, WARM, *period).period_percent
     assert expected is not None
     assert period_values(engine, data, PRECIP_PERCENT, *period)[WARM].value == pytest.approx(expected)
+
+
+def test_precipitation_percent_counts_only_complete_months(engine):
+    """Процент нормы за период — по дням полных месяцев (решение пользователя
+    2026-10-17): у Холодной в январе 2020 пропущено 10 дней, январь неполный и
+    в сравнение не входит, а сумма за период — по всем дням с данными."""
+    data = fetch_map_data(engine)
+
+    january = period_values(engine, data, PRECIP_PERCENT, date(2020, 1, 1), date(2020, 1, 31))
+    assert january[COLD] == StationValue(None, NOTE_NO_COMPLETE_MONTHS)
+    # Февраль полный и равен своей норме (норма — по тому же архиву)
+    winter = period_values(engine, data, PRECIP_PERCENT, date(2020, 1, 1), date(2020, 2, 29))
+    assert winter[COLD].value == pytest.approx(100)
+    sums = period_values(engine, data, PRECIP_SUM, date(2020, 1, 1), date(2020, 2, 29))
+    assert sums[COLD].value == pytest.approx(3.0 * (21 + 29))
+
+
+def test_precipitation_percent_without_period_is_mean_of_complete_years(engine):
+    """Без периода — средний процент годовой нормы по полным годам: 730 и
+    386 мм при норме 558 мм — 130.8 % и 69.2 %, в среднем 100 %."""
+    data = fetch_map_data(engine)
+
+    whole = period_values(engine, data, PRECIP_PERCENT)
+    assert whole[WARM].value == pytest.approx((730 / 558 + 386 / 558) / 2 * 100)
+    assert whole[WARM].note == "полных лет — 2"
+    assert whole[COLD] == StationValue(None, NOTE_NO_COMPLETE_YEARS)
 
 
 def test_precipitation_daily_maximum_carries_its_date(engine):
@@ -414,6 +446,55 @@ def test_precipitation_layer_writes_millimetres_and_percents(engine):
     assert by_wmo[COLD]["color"] == PERCENT_STOPS[-1]  # выше предела шкалы — крайним цветом
     assert "Осадки, % нормы" in percents.legend and "Осадки, % нормы, %" not in percents.legend
     assert "≥ 200 %" in percents.legend and ">100<" in percents.legend
+
+
+@pytest.mark.parametrize(
+    ("scope", "label", "expected"),
+    [
+        (SCOPE_PERIOD, "01.01.2019–31.12.2019", "730.0 мм за 01.01.2019–31.12.2019"),
+        (SCOPE_YEAR, "2019", "730.0 мм за 2019"),
+        (SCOPE_MONTH, "Март 2019", "730.0 мм за март 2019"),
+        (SCOPE_ARCHIVE, "в среднем за год", "730.0 мм в среднем за год"),
+    ],
+)
+def test_tooltip_and_card_always_name_the_period(engine, scope, label, expected):
+    """Корректировка 2026-10-17: без приписки периода число за период
+    читалось как среднее за год, как при пустом периоде."""
+    data = fetch_map_data(engine)
+
+    layer = indicator_layer(
+        data, PRECIP_SUM, {WARM: StationValue(730.0)}, indicator_scale(PRECIP_SUM, [730.0]), label, scope
+    )
+    marker = layer.markers[0]
+    assert marker["value"] == "730.0 мм"  # у кружка — только число
+    assert marker["tip"].endswith(f": {expected}")
+    assert f"<td>{expected}</td>" in marker["popup"]
+
+
+def test_temperature_whole_archive_is_named_as_such(engine):
+    data = fetch_map_data(engine)
+
+    layer = indicator_layer(
+        data, MAXIMUM, {WARM: StationValue(30.0, "10.08.2020")}, indicator_scale(MAXIMUM, [30.0]),
+        "за весь архив", SCOPE_ARCHIVE,
+    )
+    assert layer.markers[0]["tip"].endswith(": +30.0 °C за весь архив станции (10.08.2020)")
+    assert "class='how'" not in layer.markers[0]["popup"]  # описание — только у осадков
+
+
+@pytest.mark.parametrize("indicator", [PRECIP_SUM, PRECIP_PERCENT, PRECIP_DAY_MAX])
+@pytest.mark.parametrize("scope", [SCOPE_PERIOD, SCOPE_ARCHIVE, SCOPE_YEAR, SCOPE_MONTH])
+def test_precipitation_card_explains_calculation(engine, indicator, scope):
+    """Под значением показателя осадков — одна фраза о расчёте, в том числе у
+    станции без значения (там и видно, почему его нет)."""
+    data = fetch_map_data(engine)
+    values = {WARM: StationValue(100.0), COLD: StationValue(None, NOTE_NO_COMPLETE_YEARS)}
+
+    layer = indicator_layer(data, indicator, values, indicator_scale(indicator, [100.0]), "2019", scope)
+    description = INDICATOR_DESCRIPTIONS[indicator][scope]
+    assert description.endswith(".") and description.count(". ") == 0  # одно предложение
+    for marker in layer.markers:
+        assert f"<td colspan='2' class='how'>{description}</td>" in marker["popup"]
 
 
 def test_fill_layer_sizes_by_archive_length(engine):
@@ -584,12 +665,20 @@ def test_station_card_opens_dashboard_for_that_station(engine, monkeypatch):
     opened = []
     monkeypatch.setattr(
         "meteoregik.ui.map_view.DashboardDialog",
-        lambda engine, parent, wmo_index: opened.append(wmo_index) or type("D", (), {"exec": lambda self: 0})(),
+        lambda engine, parent, wmo_index, tab: opened.append((wmo_index, tab))
+        or type("D", (), {"exec": lambda self: 0})(),
     )
 
     canvas.dashboard_requested.emit(WARM)
+    assert opened == [(WARM, TAB_TEMPERATURE)]
 
-    assert opened == [WARM]
+    # На карте показатель осадков — в дашборде сразу вкладка "Осадки"
+    dialog.mode.button(MODE_INDICATOR).setChecked(True)
+    dialog.indicator_combo.setCurrentIndex(dialog.indicator_combo.findData(PRECIP_PERCENT))
+    canvas.dashboard_requested.emit(COLD)
+    dialog.indicator_combo.setCurrentIndex(dialog.indicator_combo.findData(ANOMALY))
+    canvas.dashboard_requested.emit(WARM)
+    assert opened[1:] == [(COLD, TAB_PRECIPITATION), (WARM, TAB_TEMPERATURE)]
 
 
 def test_map_of_empty_database_shows_only_directory(tmp_path):
@@ -610,6 +699,10 @@ def test_dashboard_can_open_on_given_station(engine):
 
     assert dialog._stack.currentWidget() is dialog._content
     assert dialog._station_label.text().startswith("Тёплая (27707)")
+    assert dialog.tabs.tabText(dialog.tabs.currentIndex()) == TAB_TEMPERATURE
+
+    precipitation = DashboardDialog(engine, run_async=False, wmo_index=WARM, tab=TAB_PRECIPITATION)
+    assert precipitation.tabs.currentWidget() is precipitation.precipitation_tab
 
 
 def test_slider_ends_at_last_date_of_stations_on_the_map(engine):

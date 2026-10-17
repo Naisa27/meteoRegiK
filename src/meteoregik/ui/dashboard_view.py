@@ -516,10 +516,16 @@ class _AppliedFilter:
 
 class DashboardDialog(QDialog):
     def __init__(
-        self, engine: Engine, parent=None, run_async: bool = True, wmo_index: int | None = None
+        self,
+        engine: Engine,
+        parent=None,
+        run_async: bool = True,
+        wmo_index: int | None = None,
+        tab: str = TAB_TEMPERATURE,
     ) -> None:
         """wmo_index — станция, которую сразу выбрать и показать за весь её
-        архив (переход из карточки станции на экране "Карта")."""
+        архив (переход из карточки станции на экране "Карта"); tab — какую
+        вкладку открыть (TAB_*): с карты осадков — "Осадки"."""
         super().__init__(parent)
         enable_min_max_buttons(self)
         self.engine = engine
@@ -540,6 +546,9 @@ class DashboardDialog(QDialog):
             # Выбирать не из чего — подсказка "выберите станцию" вела бы в тупик
             self._hint.setText(NO_DATA_HINT)
             self.precipitation_tab.set_hint(NO_DATA_HINT)
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == tab:
+                self.tabs.setCurrentIndex(index)
         if wmo_index is not None:
             self.station_combo.select_wmo(wmo_index)
             self._apply_filters()

@@ -49,9 +49,11 @@ from PySide6.QtWidgets import (
 )
 from sqlalchemy.engine import Engine
 
+from meteoregik.calculations.anomalies import PRECIPITATION
 from meteoregik.reports.map_data import (
     INDICATORS,
     MEAN,
+    PRECIP_PERCENT,
     PRECIP_SUM,
     STEP_MONTH,
     STEP_YEAR,
@@ -63,6 +65,10 @@ from meteoregik.reports.map_data import (
     time_series,
 )
 from meteoregik.reports.map_render import (
+    SCOPE_ARCHIVE,
+    SCOPE_MONTH,
+    SCOPE_PERIOD,
+    SCOPE_YEAR,
     MapLayer,
     background_points,
     fill_layer,
@@ -74,7 +80,7 @@ from meteoregik.resources import MAP_PAGE_PATH
 from meteoregik.ui import theme
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
-from meteoregik.ui.dashboard_view import DASHBOARD_QSS, DashboardDialog
+from meteoregik.ui.dashboard_view import DASHBOARD_QSS, TAB_PRECIPITATION, TAB_TEMPERATURE, DashboardDialog
 from meteoregik.ui.dashboard_widgets import mode_switch
 from meteoregik.ui.date_field import DateField, DateFieldError
 from meteoregik.ui.dialogs import enable_min_max_buttons, exec_window_modal, minimize_owner_instead
@@ -88,8 +94,8 @@ BASE_OSM, BASE_OUTLINE = "osm", "outline"
 # Пауза между шагами при проигрывании ползунка времени
 PLAY_INTERVAL_MS = 700
 WHOLE_ARCHIVE = "за весь архив каждой станции"
-# Сумма осадков без периода — не сумма за весь архив (архивы разной длины
-# несравнимы), а средняя годовая: reports/map_data.py
+# Сумма осадков и процент нормы без периода — не за весь архив (архивы
+# разной длины несравнимы), а в среднем за год: reports/map_data.py
 WHOLE_ARCHIVE_PER_YEAR = "в среднем за год — по полным годам архива каждой станции"
 _USER_AGENT_SUFFIX = " meteoRegiK"
 
@@ -534,16 +540,22 @@ class MapDialog(QDialog):
         if self.time_mode == TIME_PERIOD:
             if self._period:
                 title = f"{self._period[0]:%d.%m.%Y}–{self._period[1]:%d.%m.%Y}"
+                scope = SCOPE_PERIOD
             else:
-                title = WHOLE_ARCHIVE_PER_YEAR if self.indicator == PRECIP_SUM else WHOLE_ARCHIVE
+                title = WHOLE_ARCHIVE_PER_YEAR if self.indicator in (PRECIP_SUM, PRECIP_PERCENT) else WHOLE_ARCHIVE
+                scope = SCOPE_ARCHIVE
             numbers = [item.value for item in self._values.values() if item.value is not None]
-            return indicator_layer(data, self.indicator, self._values, indicator_scale(self.indicator, numbers), title)
+            scale = indicator_scale(self.indicator, numbers)
+            return indicator_layer(data, self.indicator, self._values, scale, title, scope)
         if not self._steps:
             return indicator_layer(data, self.indicator, {}, indicator_scale(self.indicator, []), "нет данных")
         # Шкала — одна на все шаги: цвет должен значить одно и то же в любом году
         numbers = [item.value for step in self._steps for item in step.values.values() if item.value is not None]
         step = self._steps[self.time_slider.value()]
-        return indicator_layer(data, self.indicator, step.values, indicator_scale(self.indicator, numbers), step.label)
+        scope = SCOPE_MONTH if self.time_mode == TIME_MONTHS else SCOPE_YEAR
+        return indicator_layer(
+            data, self.indicator, step.values, indicator_scale(self.indicator, numbers), step.label, scope
+        )
 
     def _refresh(self, fit: bool = False) -> None:
         layer = self.current_layer()
@@ -575,9 +587,16 @@ class MapDialog(QDialog):
 
     # --- переходы ---
 
+    @property
+    def dashboard_tab(self) -> str:
+        """Вкладка дашборда для перехода из карточки станции: на карте
+        показатель осадков — значит и в дашборде "Осадки"."""
+        precipitation = self.mode.checkedId() == MODE_INDICATOR and INDICATORS[self.indicator].rules is PRECIPITATION
+        return TAB_PRECIPITATION if precipitation else TAB_TEMPERATURE
+
     def _open_dashboard(self, wmo_index: int) -> None:
         self.play_btn.setChecked(False)
-        exec_window_modal(DashboardDialog(self.engine, self, wmo_index=wmo_index))
+        exec_window_modal(DashboardDialog(self.engine, self, wmo_index=wmo_index, tab=self.dashboard_tab))
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)

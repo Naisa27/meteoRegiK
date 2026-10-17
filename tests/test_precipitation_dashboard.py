@@ -81,19 +81,39 @@ def test_period_sum_is_compared_with_norm_of_its_own_days(three_years):
     assert july.period_percent == pytest.approx(150)
 
 
-def test_missing_days_do_not_lower_percent_of_norm(three_years):
-    """Дни без данных не входят ни в сумму, ни в норму периода."""
+def test_percent_of_norm_counts_days_of_complete_months_only(three_years):
+    """С нормой сравниваются только дни полных месяцев (решение пользователя
+    2026-10-17): в неполном месяце ранних rp5 сухие дни часто не записаны, и
+    сравнение по дням с данными завышало процент. Сумма — по всем дням."""
     days = dict(three_years.days)
     for day in range(1, 11):
+        del days[date(2021, 7, day)]  # июль 2021 неполный: 10 пропусков
+
+    data = compute_precipitation(_values(days), date(2021, 6, 1), date(2021, 7, 31), norms=None)
+
+    assert data.period_sum == 60 + 42
+    # сравнивается только июнь: 60 мм при норме (30 + 30 + 60) / 3
+    assert (data.compared_sum, data.compared_days) == (60, 30)
+    assert data.period_norm == pytest.approx(40)
+    assert data.period_percent == pytest.approx(150)
+
+    july = compute_precipitation(_values(days), date(2021, 7, 1), date(2021, 7, 31), norms=None)
+    assert july.period_sum == 42
+    assert july.compared_sum is None and july.period_percent is None
+
+
+def test_missing_days_of_complete_month_do_not_lower_percent_of_norm(three_years):
+    """В полном месяце (до 5 пропусков) дни без данных не входят ни в сумму, ни в норму."""
+    days = dict(three_years.days)
+    for day in (1, 2):
         del days[date(2021, 7, day)]
 
     july = compute_precipitation(_values(days), date(2021, 7, 1), date(2021, 7, 31), norms=None)
 
-    assert july.days_with_data == 21 and july.days_total == 31
-    assert july.period_sum == 42
-    # норма июля — по полным июлям 2019 и 2020 (по 31 мм); в периоде 21 день с данными
-    assert july.period_norm == pytest.approx(31 * 21 / 31)
-    assert july.period_percent == pytest.approx(200)
+    assert july.days_with_data == 29 and july.compared_days == 29
+    norm = (31 + 31 + 58) / 3
+    assert july.period_norm == pytest.approx(norm * 29 / 31)
+    assert july.period_percent == pytest.approx(58 / (norm * 29 / 31) * 100)
 
 
 def test_records_are_taken_from_complete_years_and_months_inside_period(three_years):
@@ -254,6 +274,22 @@ def test_completeness_card_reports_missed_days_and_no_missed_terms(three_years):
 
     assert completeness.value == "50.0 %"
     assert completeness.note == "10 из 20 дн., пропущено 10 дн.\nПропущенных сроков наблюдения нет"
+
+
+def test_sum_card_says_when_only_complete_months_were_compared(three_years):
+    days = dict(three_years.days)
+    for day in range(1, 11):
+        del days[date(2021, 7, day)]  # июль 2021 неполный
+
+    two_months = card_texts(compute_precipitation(_values(days), date(2021, 6, 1), date(2021, 7, 31)))[0]
+    july = card_texts(compute_precipitation(_values(days), date(2021, 7, 1), date(2021, 7, 31)))[0]
+
+    assert two_months.value == "102.0 мм"
+    assert two_months.note == (
+        "150 % средней по архиву (+20.0 мм; 40.0 мм)\nсравнение — по полным месяцам: 60.0 мм за 30 дн."
+    )
+    assert "полных месяцев периода" in two_months.help
+    assert (july.value, july.note) == ("42.0 мм", "нет полных месяцев — с нормой не сравнить")
 
 
 def test_card_texts_explain_missing_values_and_every_card_has_its_own_help():

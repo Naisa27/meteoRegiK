@@ -26,6 +26,12 @@
 станции (label), а значение показателя или полноты — второй строкой под ним
 (value). Раньше в режимах "Показатель" и "Полнота" число заменяло название,
 и было не понять, чья это станция. Цвет читается только вместе с числом.
+
+Подсказка и карточка станции (корректировки 2026-10-17): к значению всегда
+дописано, за что оно ("за 01.01.2020–31.12.2020", "за 2014", "в среднем за
+год") — без этого число за период читалось как среднее за год; у
+показателей осадков под значением — одна фраза о том, как оно посчитано
+(INDICATOR_DESCRIPTIONS).
 """
 
 from __future__ import annotations
@@ -39,7 +45,9 @@ from meteoregik.reports.dashboard_data import format_signed
 from meteoregik.reports.map_data import (
     ANOMALY,
     INDICATORS,
+    PRECIP_DAY_MAX,
     PRECIP_PERCENT,
+    PRECIP_SUM,
     MapData,
     MapStation,
     StationValue,
@@ -70,6 +78,50 @@ FILL_SCALE_FLOOR = 0.5
 RADIUS = 9
 RADIUS_MIN, RADIUS_MAX = 6, 15
 DASHBOARD_LINK = "app://dashboard/{wmo_index}"
+
+# За что показано значение: заданный период, весь архив каждой станции, шаг
+# ползунка — год или месяц
+SCOPE_PERIOD, SCOPE_ARCHIVE, SCOPE_YEAR, SCOPE_MONTH = "period", "archive", "year", "month"
+
+# Как посчитан показатель осадков — одной фразой под значением в карточке
+# станции. Тексты описывают фактический расчёт (reports/map_data.py) —
+# менять вместе с ним.
+INDICATOR_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    PRECIP_SUM: {
+        SCOPE_PERIOD: "Сумма суточных сумм осадков за все дни периода, по которым есть данные.",
+        SCOPE_ARCHIVE: "Среднее из годовых сумм осадков за полные годы архива станции.",
+        SCOPE_YEAR: "Сумма суточных сумм осадков за год; показываются только полные годы.",
+        SCOPE_MONTH: "Сумма суточных сумм осадков за месяц; показываются только полные месяцы.",
+    },
+    PRECIP_PERCENT: {
+        SCOPE_PERIOD: (
+            "Сумма осадков за дни полных месяцев периода, делённая на норму тех же дней "
+            "(норма месяца поровну на его дни)."
+        ),
+        SCOPE_ARCHIVE: "Среднее за полные годы архива отношение годовой суммы осадков к годовой норме станции.",
+        SCOPE_YEAR: "Сумма осадков за полный год, делённая на годовую норму станции.",
+        SCOPE_MONTH: "Сумма осадков за полный месяц, делённая на норму этого месяца.",
+    },
+    PRECIP_DAY_MAX: {
+        SCOPE_PERIOD: "Наибольшая суточная сумма осадков среди всех дней периода с данными.",
+        SCOPE_ARCHIVE: "Наибольшая суточная сумма осадков за весь архив станции.",
+        SCOPE_YEAR: "Наибольшая суточная сумма осадков за год, по всем дням с данными.",
+        SCOPE_MONTH: "Наибольшая суточная сумма осадков за месяц, по всем дням с данными.",
+    },
+}
+
+
+def scope_text(indicator: str, scope: str, label: str = "") -> str:
+    """За что значение — дописывается к нему в подсказке и карточке.
+    label — даты периода ("01.01.2020–31.12.2020") или шаг ("Март 2014")."""
+    if scope == SCOPE_ARCHIVE:
+        # Суммы и проценты без периода — в среднем за год (reports/map_data.py)
+        return "в среднем за год" if indicator in (PRECIP_SUM, PRECIP_PERCENT) else "за весь архив станции"
+    return f"за {label[:1].lower()}{label[1:]}" if scope == SCOPE_MONTH else f"за {label}"
+
+
+def indicator_description(indicator: str, scope: str) -> str:
+    return INDICATOR_DESCRIPTIONS.get(indicator, {}).get(scope, "")
 
 
 def _rgb(color: str) -> tuple[int, int, int]:
@@ -147,9 +199,11 @@ def _period(period: tuple[Any, Any] | None) -> str:
     return f"{period[0]:%d.%m.%Y}–{period[1]:%d.%m.%Y}" if period else "—"
 
 
-def popup_html(station: MapStation, row: StationSourceRow | None, extra: tuple[str, str] | None = None) -> str:
+def popup_html(
+    station: MapStation, row: StationSourceRow | None, extra: tuple[str, str] | None = None, description: str = ""
+) -> str:
     """Карточка станции по щелчку. extra — (название, значение) показателя
-    текущего режима, первой строкой."""
+    текущего режима, первой строкой; description — как оно посчитано, под ним."""
     lines: list[tuple[str, str]] = [extra] if extra else []
     if row is None:
         lines.append(("Данные", "не залиты"))
@@ -164,7 +218,10 @@ def popup_html(station: MapStation, row: StationSourceRow | None, extra: tuple[s
             lines.append(("Пропущено дней", f"{_count(row.days_missing)} из {_count(row.days_total)}"))
         if row.obs_days:
             lines.append(("Пропущено сроков", _count(row.obs_missing)))
-    rows = "".join(f"<tr><th>{escape(name)}</th><td>{escape(value)}</td></tr>" for name, value in lines)
+    cells = [f"<tr><th>{escape(name)}</th><td>{escape(value)}</td></tr>" for name, value in lines]
+    if extra and description:
+        cells.insert(1, f"<tr><td colspan='2' class='how'>{escape(description)}</td></tr>")
+    rows = "".join(cells)
     link = (
         f"<a class='open' href='{DASHBOARD_LINK.format(wmo_index=station.wmo_index)}'>Открыть в дашборде</a>"
         if row is not None and row.days_total
@@ -230,10 +287,15 @@ def indicator_layer(
     values: Mapping[int, StationValue],
     scale: ColorScale,
     period_title: str,
+    scope: str = "",
 ) -> MapLayer:
+    """period_title — подпись периода в легенде; scope — за что значения
+    (SCOPE_*), из него и period_title — приписка к значению в подсказке."""
     located = data.located
     info = INDICATORS[indicator]
     title = info.label
+    period = scope_text(indicator, scope, period_title) if scope else ""
+    description = indicator_description(indicator, scope)
     markers = []
     any_muted = False
     for wmo, item in values.items():
@@ -244,16 +306,21 @@ def indicator_layer(
         if item.value is None:
             any_muted = True
             text = item.note or "нет значения"
+            if period:
+                text = f"{text} ({period})"
             markers.append(_marker(
                 station, color=MUTED_COLOR, radius=RADIUS - 2, label=name, value="", tip=f"{station.label}: {text}",
-                popup=popup_html(station, data.sources.get(wmo), (title, text)), muted=True,
+                popup=popup_html(station, data.sources.get(wmo), (title, text), description), muted=True,
             ))
             continue
         number = format_value(indicator, item.value)
-        detail = f"{number} ({item.note})" if item.note else number
+        detail = f"{number} {period}" if period else number
+        if item.note:
+            detail = f"{detail} ({item.note})"
         markers.append(_marker(
             station, color=scale.color(item.value), radius=RADIUS, label=name, value=number,
-            tip=f"{station.label}: {detail}", popup=popup_html(station, data.sources.get(wmo), (title, detail)),
+            tip=f"{station.label}: {detail}",
+            popup=popup_html(station, data.sources.get(wmo), (title, detail), description),
             muted=False,
         ))
     middle = {ANOMALY: "0", PRECIP_PERCENT: "100"}.get(indicator, "")

@@ -19,11 +19,16 @@ dashboard_data.is_short_period; решение пользователя 2026-10-
 в нём не больше одного, поэтому вместо самого влажного/сухого года — декады,
 теплокарта — месяцы × декады, а график годовых сумм — по месяцам.
 
-Сравнение суммы за период с нормой. Норма "для этого периода" — сумма
-суточных долей месячных норм (норма месяца / число дней в нём) по тем дням
-периода, за которые есть сумма: так сравнение корректно для любого периода
-(лето сравнивается с летней нормой) и не занижается пропусками — дни без
-данных не входят ни в сумму, ни в норму.
+Сравнение суммы за период с нормой (процент нормы). Сравниваются только
+дни периода, попавшие в ПОЛНЫЕ месяцы (правило "3/5"; решение пользователя
+2026-10-17): сумма этих дней — к сумме их суточных долей месячных норм
+(норма месяца / число дней в нём). Доли нужны, чтобы сравнение было
+корректно для любого периода (лето сравнивается с летней нормой, полмесяца —
+с половиной нормы месяца). Неполные месяцы не участвуют: в ранних выгрузках
+rp5 сухие дни часто не записаны вовсе, в таком месяце остаются почти одни
+дни с осадками, и сравнение "по дням с данными" давало завышенный процент
+(Мосальск 2005–2013: 155 % нормы при обычных по сумме годах). Сама сумма за
+период — по всем дням с данными, как и раньше.
 
 День с осадками — сутки с суммой не меньше WET_DAY_MM (1 мм): порог ВМО для
 "влажного дня", он отсекает следы осадков и росу (0.1–0.9 мм), от которых
@@ -200,8 +205,11 @@ class PrecipitationData:
     # Дни с суммой, в которые пропущен срок наблюдения rp5 (сумма может быть занижена)
     missed_term_days: int = 0
     period_sum: float | None = None
-    # Норма для дней периода с данными (см. описание модуля); None — месячных норм нет
+    # Сравнение с нормой — по дням полных месяцев периода (см. описание
+    # модуля): их сумма, норма и число; None — таких дней нет или нет норм
+    compared_sum: float | None = None
     period_norm: float | None = None
+    compared_days: int = 0
     daily_max: DatedValue | None = None
     wet_days: int = 0  # дней с осадками в периоде
     # Среднее число дней с осадками за полный год периода и по скольким годам; None — полных лет нет
@@ -233,7 +241,7 @@ class PrecipitationData:
 
     @property
     def period_percent(self) -> float | None:
-        return percent_of_norm(self.period_sum, self.period_norm) if self.period_sum is not None else None
+        return percent_of_norm(self.compared_sum, self.period_norm) if self.compared_sum is not None else None
 
 
 # --- выборка ---
@@ -312,10 +320,13 @@ def compute_precipitation(
     # --- карточки по дням периода ---
     period_days = [(day, value) for day, value in values.days.items() if date_from <= day <= date_to]
     period_sum = round(sum(value for _, value in period_days), precipitation.ROUND_DIGITS) if period_days else None
-    daily_norms = [
-        month_norms[day.month] / monthrange(day.year, day.month)[1] for day, _ in period_days if day.month in month_norms
+    compared = [
+        (value, month_norms[day.month] / monthrange(day.year, day.month)[1])
+        for day, value in period_days
+        if (day.year, day.month) in norms.complete_months and day.month in month_norms
     ]
-    period_norm = sum(daily_norms) if daily_norms else None
+    compared_sum = round(sum(value for value, _ in compared), precipitation.ROUND_DIGITS) if compared else None
+    period_norm = sum(norm for _, norm in compared) if compared else None
     wet_by_year: dict[int, int] = {}
     for day, value in period_days:
         if value >= WET_DAY_MM:
@@ -371,7 +382,9 @@ def compute_precipitation(
         days_with_data=len(period_days),
         missed_term_days=sum(1 for day, _ in period_days if day in missed_terms),
         period_sum=period_sum,
+        compared_sum=compared_sum,
         period_norm=period_norm,
+        compared_days=len(compared),
         daily_max=_extreme(period_days, highest=True),
         wet_days=sum(wet_by_year.values()),
         wet_days_per_year=fmean(wet_years) if wet_years else None,
