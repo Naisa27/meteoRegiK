@@ -18,7 +18,8 @@ MainWindow сам решает, что делать. Кнопки — четыр
 (правка 2026-09-30; "Аналитика" — 2026-10-05), у каждого ряда подпись и своя
 гамма из theme.py: "Работа с данными" (оттенки синего — импорт, просмотр
 исходных и агрегатных данных), "Расчёт показателей" (зелёные — отклонения
-от нормы, anomaly_calc_requested), "Справочники" (тёмное золото, station_directory_requested) и
+от нормы, anomaly_calc_requested; переходы температуры через пороги,
+transitions_requested — 2026-10-26), "Справочники" (тёмное золото, station_directory_requested) и
 "Аналитика" (фиолетовый, дашборд — dashboard_requested, карта —
 map_requested).
 
@@ -71,6 +72,7 @@ class GreetingWidget(QWidget):
     data_browser_requested = Signal()
     aggregate_view_requested = Signal()
     anomaly_calc_requested = Signal()
+    transitions_requested = Signal()
     dashboard_requested = Signal()
     map_requested = Signal()
     station_directory_requested = Signal()
@@ -189,7 +191,10 @@ class GreetingWidget(QWidget):
         # следующие показатели добавляются кнопками в этот же ряд.
         calc_row = self._button_row(
             layout, "Расчёт показателей", theme.CALC_ROW_TITLE,
-            [("Отклонения от нормы", self.anomaly_calc_requested)],
+            [
+                ("Отклонения от нормы", self.anomaly_calc_requested),
+                ("Переходы температуры", self.transitions_requested),
+            ],
             theme.CALC_ROW_COLORS,
         )
         layout.addLayout(calc_row)

@@ -60,6 +60,13 @@ calculations/recompute.py для диалога разрешения конфл�
 открытии дашборда, карты или по кнопке. Суммы осадков пересчитываются ещё
 раз — к ним добавились сезонные (period_type='season').
 
+Миграция 9 — три новые таблицы дат устойчивого перехода температуры
+(temperature_transitions, transition_seasons, transition_state;
+calculations/transitions.py). Пересчёта при запуске нет: посчитанных
+сезонов ни у одной станции нет, а "нет строки сезона" и значит "требуется
+расчёт" — даты досчитываются при первом открытии окна "Переходы
+температуры" (решение пользователя 2026-10-26).
+
 Обновление у пользователя (решение 2026-10-11). Миграции с пересчётом
 данных перечислены в DATA_UPDATES: что именно досчитывается, словами для
 пользователя. Если такие ждут применения и в базе есть данные
@@ -90,9 +97,12 @@ from meteoregik.db.schema import (
     rp5_readings,
     schema_version,
     station_norms,
+    temperature_transitions,
+    transition_seasons,
+    transition_state,
 )
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
@@ -177,6 +187,8 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_7(conn, progress)
             if version < 8:
                 _migrate_to_8(conn, progress)
+            if version < 9:
+                _migrate_to_9(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -226,6 +238,12 @@ def _migrate_to_8(conn: Connection, progress: StationProgress | None = None) -> 
     conn.exec_driver_sql("DROP TABLE IF EXISTS anomaly_state")
     metadata.create_all(conn, tables=[anomaly_state, norm_bases], checkfirst=True)
     _rebuild_precipitation(conn, progress)
+
+
+def _migrate_to_9(conn: Connection) -> None:
+    metadata.create_all(
+        conn, tables=[temperature_transitions, transition_seasons, transition_state], checkfirst=True
+    )
 
 
 def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:

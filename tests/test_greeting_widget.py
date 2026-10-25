@@ -37,8 +37,8 @@ def test_greeting_widget_emits_data_browser_requested_on_button_click():
 
     buttons = widget.findChildren(QPushButton)
     # "Путеводитель по приложению", три кнопки "Работы с данными", "Отклонения
-    # от нормы", "Справочники", "Дашборд" и "Карта"
-    assert len(buttons) == 8
+    # от нормы", "Переходы температуры", "Справочники", "Дашборд" и "Карта"
+    assert len(buttons) == 9
     data_browser_btn = next(b for b in buttons if b.text() == "Просмотр исходных данных")
     data_browser_btn.click()
 

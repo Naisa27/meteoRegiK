@@ -15,6 +15,7 @@ from meteoregik.ui.guide_window import GuideWindow
 from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
 from meteoregik.ui.station_directory import StationDirectoryDialog
+from meteoregik.ui.transitions_dialog import TransitionsDialog
 from meteoregik.version import app_version
 
 
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
         greeting.data_browser_requested.connect(self._open_data_browser)
         greeting.aggregate_view_requested.connect(self._open_aggregate_view)
         greeting.anomaly_calc_requested.connect(self._open_anomaly_calc)
+        greeting.transitions_requested.connect(self._open_transitions)
         greeting.dashboard_requested.connect(self._open_dashboard)
         greeting.map_requested.connect(self._open_map)
         greeting.station_directory_requested.connect(self._open_station_directory)
@@ -127,6 +129,10 @@ class MainWindow(QMainWindow):
 
     def _open_anomaly_calc(self) -> None:
         dialog = AnomalyCalcDialog(self.engine, self)
+        exec_window_modal(dialog)
+
+    def _open_transitions(self) -> None:
+        dialog = TransitionsDialog(self.engine, self)
         exec_window_modal(dialog)
 
     def _open_map(self) -> None:

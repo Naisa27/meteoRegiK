@@ -36,7 +36,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations.anomalies import mark_stale
-from meteoregik.calculations import precipitation
+from meteoregik.calculations import precipitation, transitions
 from meteoregik.calculations.temperature import Stats, daily_stats, decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings
 
@@ -308,9 +308,12 @@ def recompute_range(
     Нормы и отклонения станции (calculations/anomalies.py) здесь не
     пересчитываются — станция только помечается требующей расчёта. Пометка —
     первым делом: если пересчёт оборвётся на середине, станция всё равно не
-    останется со старыми отклонениями при новых суточных значениях."""
+    останется со старыми отклонениями при новых суточных значениях. Так же
+    помечаются сезоны дат перехода температуры (calculations/transitions.py),
+    в окно которых попал диапазон."""
     with engine.begin() as conn:
         mark_stale(conn, wmo_index)
+        transitions.mark_stale(conn, wmo_index, start, end)
         # Основной ряд сроков осадков — один на станцию и на весь пересчёт
         main_series = precipitation.main_series(conn, wmo_index)
     day = start

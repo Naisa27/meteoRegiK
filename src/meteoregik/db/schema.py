@@ -224,3 +224,50 @@ norm_bases = Table(
     Column("years", Integer, nullable=False),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
 )
+
+# --- даты устойчивого перехода температуры (миграция 9, calculations/transitions.py) ---
+
+# Дата перехода средней суточной температуры через порог в сезон года.
+# season: 'spring' | 'autumn' (осень года — та, что после его лета, её окно
+# заходит в январь–февраль следующего года). status: 'date' — дата в
+# transition_date; 'none' — перехода не было; 'no_data' — в окне поиска есть
+# неполный месяц.
+temperature_transitions = Table(
+    "temperature_transitions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("wmo_index", Integer, nullable=False),
+    Column("year", Integer, nullable=False),
+    Column("season", Text, nullable=False),
+    Column("threshold", Integer, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("transition_date", Date, nullable=True),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    UniqueConstraint("wmo_index", "year", "season", "threshold", name="uq_temperature_transitions_key"),
+)
+
+# Посчитанные сезоны. Строки нет (или rule_version старая) — сезон требует
+# расчёта: calculations/recompute.py удаляет строки сезонов, в окно поиска
+# которых попали изменённые дни. Пересчитывается только затронутое — даты
+# переходов, в отличие от норм, от остального архива не зависят.
+transition_seasons = Table(
+    "transition_seasons",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("year", Integer, primary_key=True, autoincrement=False),
+    Column("season", Text, primary_key=True),
+    Column("calculated_at", DateTime, nullable=False),
+    Column("rule_version", Integer, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+)
+
+# Последний расчёт станции: когда и какие сезоны пересчитаны (словами — для
+# вкладки "Состояние расчёта").
+transition_state = Table(
+    "transition_state",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("calculated_at", DateTime, nullable=False),
+    Column("recalculated", Text, nullable=False),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+)
