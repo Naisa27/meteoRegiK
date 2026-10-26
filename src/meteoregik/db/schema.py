@@ -231,7 +231,8 @@ norm_bases = Table(
 # season: 'spring' | 'autumn' (осень года — та, что после его лета, её окно
 # заходит в январь–февраль следующего года). status: 'date' — дата в
 # transition_date; 'none' — перехода не было; 'no_data' — в окне поиска есть
-# неполный месяц.
+# неполный месяц, нужный для даты. method — прочтение метода Педя: 'hmc'
+# (Гидрометцентр) или 'kr' ("Климат России"); столбец — с миграции 10.
 temperature_transitions = Table(
     "temperature_transitions",
     metadata,
@@ -240,10 +241,11 @@ temperature_transitions = Table(
     Column("year", Integer, nullable=False),
     Column("season", Text, nullable=False),
     Column("threshold", Integer, nullable=False),
+    Column("method", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("transition_date", Date, nullable=True),
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
-    UniqueConstraint("wmo_index", "year", "season", "threshold", name="uq_temperature_transitions_key"),
+    UniqueConstraint("wmo_index", "year", "season", "threshold", "method", name="uq_temperature_transitions_key"),
 )
 
 # Посчитанные сезоны. Строки нет (или rule_version старая) — сезон требует

@@ -89,12 +89,15 @@ class MainWindow(QMainWindow):
         frame.moveCenter(available.center())
         self.move(max(frame.left(), available.left()), max(frame.top(), available.top()))
 
-    def _open_guide(self) -> None:
+    def _open_guide(self, section: str | None = None) -> None:
         """Путеводитель — одно немодальное окно на всё время работы: повторное
-        нажатие кнопки возвращает его на передний план на том же разделе."""
+        нажатие кнопки возвращает его на передний план на том же разделе.
+        section — открыть на этом разделе (ссылка "подробнее" из окна)."""
         if self._guide is None:
             self._guide = GuideWindow(self._data_dir())
             self._guide.place_beside(self)
+        if section is not None:
+            self._guide.show_section(section)
         self._guide.bring_to_front()
 
     def _data_dir(self) -> Path | None:
@@ -132,7 +135,7 @@ class MainWindow(QMainWindow):
         exec_window_modal(dialog)
 
     def _open_transitions(self) -> None:
-        dialog = TransitionsDialog(self.engine, self)
+        dialog = TransitionsDialog(self.engine, self, open_guide=self._open_guide)
         exec_window_modal(dialog)
 
     def _open_map(self) -> None:

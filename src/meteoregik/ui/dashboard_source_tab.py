@@ -219,6 +219,8 @@ class Column:
     tip: str = ""
     # Общий заголовок верхнего уровня для соседних столбцов (GroupedHeader)
     group: str = ""
+    # По центру, а не по правому краю, как остальные числа
+    centered: bool = False
 
 
 def _period_key(period: Period | None) -> int:
@@ -309,6 +311,8 @@ class RowsModel(QAbstractTableModel):
             return column.text(row)
         if role == _SORT_ROLE:
             return column.key(row)
+        if role == Qt.ItemDataRole.TextAlignmentRole and column.centered:
+            return int(Qt.AlignmentFlag.AlignCenter)
         if role == Qt.ItemDataRole.TextAlignmentRole and column.numeric:
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ToolTipRole and not column.numeric:

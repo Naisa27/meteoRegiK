@@ -29,6 +29,34 @@ from PySide6.QtWidgets import (
 from meteoregik.ui import theme
 
 
+# Значок "?" (HelpBadge) и подсказки — общие для дашборда и окон расчёта
+HELP_QSS = f"""
+QToolButton#helpBadge {{
+    color: {theme.TEXT_SECONDARY};
+    background: {theme.INPUT_BG};
+    border: 1px solid {theme.TEXT_SECONDARY};
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 18px; max-width: 18px;
+    min-height: 18px; max-height: 18px;
+    padding: 0;
+}}
+QToolButton#helpBadge:hover {{ background: {theme.HEADER_BG}; color: {theme.TEXT_PRIMARY}; }}
+QToolButton#helpBadge:focus {{
+    border: {theme.FOCUS_RING_WIDTH}px solid {theme.FOCUS_RING};
+    color: {theme.TEXT_PRIMARY};
+}}
+QToolTip {{
+    color: {theme.TEXT_PRIMARY};
+    background: {theme.INPUT_BG};
+    border: 1px solid {theme.BORDER};
+    padding: 6px;
+    font-size: 12px;
+}}
+"""
+
+
 def format_day(day: date) -> str:
     return f"{day:%d.%m.%Y}"
 
@@ -46,11 +74,11 @@ class CardText:
     help: str = ""
 
 
-def tooltip_html(text: str) -> str:
+def tooltip_html(text: str, width: int = 340) -> str:
     """Подсказка как rich text фиксированной ширины — такую Qt переносит по
     словам, а не тянет одной строкой во весь экран; абзацы — по пустой строке."""
     paragraphs = "".join(f"<p style='margin: 0 0 6px 0'>{p}</p>" for p in text.split("\n\n"))
-    return f"<div style='width: 340px'>{paragraphs}</div>"
+    return f"<div style='width: {width}px'>{paragraphs}</div>"
 
 
 class HelpBadge(QToolButton):
@@ -66,8 +94,8 @@ class HelpBadge(QToolButton):
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.clicked.connect(self.show_tip)
 
-    def set_help(self, caption: str, text: str) -> None:
-        self.setToolTip(tooltip_html(text) if text else "")
+    def set_help(self, caption: str, text: str, width: int = 340) -> None:
+        self.setToolTip(tooltip_html(text, width) if text else "")
         self.setAccessibleName(f"Как считается: {caption}")
         self.setAccessibleDescription(text)
 

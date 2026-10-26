@@ -7,8 +7,14 @@
 - "Таблица переходов" и "Таблица периодов" — выбранной станции, раскладка
   по примеру пользователя (reports/transitions_view.py);
 - "Состояние расчёта" — по всем станциям: когда посчитано, сколько лет с
-  датами, сколько сезонов "нет данных" и что пересчитано при последнем
-  открытии.
+  датами, какие сезоны "нет данных" (с неполными месяцами) и что
+  пересчитано при последнем открытии.
+
+В ячейках таблиц — два прочтения метода Педя через слэш (корректировка
+2026-10-27). Порядок прочтений подписан над таблицами, рядом — значок "?"
+с кратким описанием обоих и ссылка на раздел путеводителя (вариант,
+выбранный из предложенных в task.md: значок — как у карточек дашборда,
+подробности — в путеводителе, который можно держать рядом с окном).
 
 Кнопок расчёта нет (решение пользователя): при открытии окна в фоне
 досчитываются все сезоны, требующие расчёта (calculations/transitions.py:
@@ -23,15 +29,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPersistentModelIndex, QRect, QSize, QStandardPaths, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFileDialog,
     QFrame,
@@ -42,6 +50,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
@@ -58,8 +67,11 @@ from meteoregik.reports import table_palette
 from meteoregik.reports.transitions_view import (
     KIND_NO_DATA,
     KIND_NONE,
+    METHODS_ORDER,
+    MONTHS,
     YEAR_TITLE,
     Table,
+    month_text,
     periods_table,
     transitions_table,
 )
@@ -68,6 +80,7 @@ from meteoregik.ui import theme
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.dashboard_source_tab import Column, _make_table, format_period
+from meteoregik.ui.dashboard_widgets import HELP_QSS, HelpBadge, tooltip_html
 from meteoregik.ui.dialogs import enable_min_max_buttons, minimize_owner_instead
 from meteoregik.ui.empty_state import NO_DATA_HINT, hint_label
 from meteoregik.ui.loading_overlay import LoadingOverlay
@@ -84,6 +97,39 @@ _INTRO = (
     "После импорта или правки данных пересчитываются только затронутые сезоны — при открытии этого окна."
 )
 _START_HINT = "Выберите метеостанцию — здесь появятся её даты переходов по годам."
+GUIDE_SECTION = "transitions"
+_LEGEND = f"В ячейках — два прочтения метода: {METHODS_ORDER}"
+# Краткое описание прочтений для значка "?"; подробно, с примером, — раздел
+# путеводителя (meteoregik/guide.py, _TRANSITIONS). Менять вместе с расчётом
+# (calculations/transitions.py).
+METHODS_HELP = (
+    "<b>Как считается дата перехода</b>\n\n"
+    "Обе даты в ячейке считаются методом сумм отклонений Д. А. Педя. Для каждого дня "
+    "находится разница между его средней суточной температурой и порогом. Например, для "
+    "порога 5 °C день со средней температурой 8 °C даёт +3, а день с 2 °C даёт −3.\n\n"
+    "Дни, идущие подряд выше порога, составляют тёплый период, а дни подряд не выше "
+    "порога — холодный период. Для каждого периода складываются разницы всех его дней: "
+    "так получается, сколько в периоде было тепла или холода.\n\n"
+    "Весной датой перехода считается первый день тёплого периода, тепло которого больше "
+    "холода каждого из следующих похолоданий вплоть до 31 июля. Поэтому короткий и "
+    "слабый возврат холодов переход не отменяет, а долгий и сильный — отменяет, и дата "
+    "сдвигается на тепло после него. Осенью всё наоборот: ищется первый холодный период, "
+    "холод которого больше тепла каждого из следующих потеплений вплоть до конца февраля.\n\n"
+    "<b>Чем различаются два значения в ячейке.</b> Они отличаются тем, какое тепло "
+    "сравнивается с очередным похолоданием:<br>"
+    "• <b>Гидрометцентр</b> (левое значение) — всё тепло, накопленное с первого дня "
+    "перехода до этого похолодания, в том числе тепло тёплых дней между более ранними "
+    "похолоданиями;<br>"
+    "• <b>«Климат России»</b> (правое значение) — только тепло самого первого тёплого "
+    "периода.<br>"
+    "Если перед каждым похолоданием был всего один тёплый период, даты совпадают. Если "
+    "тепло идёт с перерывами, дата по «Климату России» обычно получается позже.\n\n"
+    "<b>Когда в ячейке «нет данных».</b> Дата считается, только если полные все месяцы "
+    "от начала поиска (весной — от 1 января, осенью — от 1 июля) до месяца, следующего за "
+    "месяцем перехода. Полным считается месяц, в котором пропущено не больше 5 дней и не "
+    "больше 3 дней подряд.\n\n"
+    "Пример расчёта по шагам — в путеводителе."
+)
 _NO_VALUE = "—"
 _EXPORT_DIR_KEY = "transitions.export_dir"
 
@@ -91,7 +137,8 @@ TRANSITIONS_QSS = f"""
 QLabel#calcIntro {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
 QLabel#stationTitle {{ font-weight: 600; font-size: 14px; }}
 QLabel#calcSummary {{ color: {theme.TEXT_PRIMARY}; font-size: 13px; font-weight: 600; }}
-"""
+QLabel#methodsLegend {{ color: {theme.TEXT_PRIMARY}; font-size: 12px; }}
+""" + HELP_QSS
 
 _MEAN_FILL = "#EEF2F4"
 
@@ -135,7 +182,9 @@ class TableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return cell.text
         if role == Qt.ItemDataRole.ToolTipRole:
-            return cell.tip or None
+            # Rich text фиксированной ширины: простой текст Qt тянет одной
+            # строкой во всю ширину экрана
+            return tooltip_html(cell.tip) if cell.tip else None
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int(Qt.AlignmentFlag.AlignCenter)
         if role == Qt.ItemDataRole.ForegroundRole and cell.kind in (KIND_NONE, KIND_NO_DATA):
@@ -152,7 +201,8 @@ class TableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return YEAR_TITLE if section == 0 else self.table.columns[section - 1].title
         if role == Qt.ItemDataRole.ToolTipRole and section > 0:
-            return self.table.columns[section - 1].tip or None
+            tip = self.table.columns[section - 1].tip
+            return tooltip_html(tip) if tip else None
         return None
 
     def is_mean(self, row: int) -> bool:
@@ -267,6 +317,11 @@ def _station_table() -> tuple[QTableView, TableModel]:
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     table.setAlternatingRowColors(True)
     table.verticalHeader().setDefaultSectionSize(30)
+    table.setWordWrap(True)
+    # Год узкий, но подпись последней строки длинная ("Средняя многолетняя
+    # дата") — столбец фиксированной ширины, подпись переносится
+    table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+    table.horizontalHeader().resizeSection(0, 130)
     return table, model
 
 
@@ -283,25 +338,120 @@ def _moment(moment: datetime | None) -> str:
     return f"{moment:%d.%m.%Y %H:%M}" if moment else "не рассчитано"
 
 
+def _month_name(year: int, month: int, season_year: int) -> str:
+    # Год пишется, только если месяц — уже следующего года (январь–февраль осени)
+    return MONTHS[month - 1] if year == season_year else f"{MONTHS[month - 1]} {year}"
+
+
+def _next_month(year: int, month: int) -> tuple[int, int]:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _season_months_text(season: tr.NoDataSeason) -> str:
+    """Неполные месяцы сезона; подряд идущие месяцы совсем без данных —
+    одним диапазоном: "июль (11 дн. из 31), август – февраль 2016: нет данных"."""
+    if season.empty:
+        return "нет данных за весь сезон"
+    parts: list[str] = []
+    empty_run: list[tuple[int, int]] = []
+
+    def flush() -> None:
+        if not empty_run:
+            return
+        first, last = empty_run[0], empty_run[-1]
+        name = _month_name(*first, season.year)
+        if last != first:
+            # Год — один раз, у конца диапазона: "январь – февраль 2022"
+            start = MONTHS[first[1] - 1] if first[0] == last[0] else name
+            name = f"{start} – {_month_name(*last, season.year)}"
+        parts.append(f"{name}: нет данных")
+        empty_run.clear()
+
+    for y, m, present, length in season.months:
+        if present == 0:
+            if empty_run and (y, m) != _next_month(*empty_run[-1]):
+                flush()  # между пустыми месяцами был полный — диапазон рвётся
+            empty_run.append((y, m))
+            continue
+        flush()
+        parts.append(month_text(y, m, present, length, season.year))
+    flush()
+    return ", ".join(parts)
+
+
+def no_data_html(seasons: list[tr.NoDataSeason]) -> str:
+    """Сезоны "нет данных" в столбик, год жирным (решение пользователя
+    2026-10-27 — без общего числа сезонов): "<b>2015</b>: июль (11 дн. из 31)".
+    Ячейку рисует RichTextDelegate."""
+    if not seasons:
+        return _NO_VALUE
+    return "<br>".join(f"<b>{season.year}</b>: {_season_months_text(season)}" for season in seasons)
+
+
+def _no_data_column(season: str, title: str) -> Column:
+    return Column(
+        title, lambda r: no_data_html(r.state.no_data_seasons.get(season, [])),
+        lambda r: len(r.state.no_data_seasons.get(season, [])),
+        tip="Сезоны, где хотя бы одна дата — «нет данных»: в нужной для неё части окна поиска "
+            "есть неполный месяц. По строке на сезон — год и неполные месяцы окна",
+    )
+
+
+class RichTextDelegate(QStyledItemDelegate):
+    """Ячейка с простым HTML (жирные годы): стандартный делегат Qt рисует
+    текст как есть, с тегами. Высота — по тексту, перенесённому по ширине
+    столбца (строки таблицы подстраиваются под содержимое)."""
+
+    _PADDING = 4
+
+    def __init__(self, view: QTableView) -> None:
+        super().__init__(view)
+        self._view = view
+
+    def _document(self, index: QModelIndex, width: int) -> QTextDocument:
+        document = QTextDocument()
+        document.setDefaultFont(self._view.font())
+        document.setHtml(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        document.setTextWidth(max(width - 2 * self._PADDING, 10))
+        return document
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        # Фон (чередование строк, выделение) — стандартный, без текста
+        self.initStyleOption(option, index)
+        option.text = ""
+        style = option.widget.style() if option.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        document = self._document(index, option.rect.width())
+        painter.save()
+        top = option.rect.top() + max((option.rect.height() - document.size().height()) / 2, 0)
+        painter.translate(option.rect.left() + self._PADDING, top)
+        document.drawContents(painter)
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802 — имя метода Qt
+        width = self._view.columnWidth(index.column())
+        document = self._document(index, width)
+        return QSize(width, int(document.size().height()) + 2 * self._PADDING)
+
+
 STATE_COLUMNS = [
     Column("Станция", lambda r: r.label, lambda r: r.label.casefold()),
     Column("Период данных", lambda r: format_period(r.state.period), lambda r: r.state.period[0].toordinal(),
            tip="Первый и последний день со средней суточной температурой"),
-    Column("Рассчитано", lambda r: _moment(r.state.calculated_at),
+    Column("Дата последнего\nрасчёта", lambda r: _moment(r.state.calculated_at),
            lambda r: r.state.calculated_at.timestamp() if r.state.calculated_at else 0.0,
            tip="Когда переходы станции пересчитывались в последний раз"),
-    Column("Лет с датами", lambda r: str(r.state.years_with_dates), lambda r: r.state.years_with_dates,
-           numeric=True, tip="Лет, где посчитана хотя бы одна дата перехода"),
-    Column("«Нет данных»\nвёсен", lambda r: str(r.state.no_data_seasons.get(tr.SPRING, 0)),
-           lambda r: r.state.no_data_seasons.get(tr.SPRING, 0), numeric=True,
-           tip="Сезонов, где в окне поиска есть неполный месяц — дата не считается"),
-    Column("«Нет данных»\nосеней", lambda r: str(r.state.no_data_seasons.get(tr.AUTUMN, 0)),
-           lambda r: r.state.no_data_seasons.get(tr.AUTUMN, 0), numeric=True,
-           tip="Сезонов, где в окне поиска есть неполный месяц — дата не считается"),
+    Column("Лет с датами\nпереходов", lambda r: str(r.state.years_with_dates), lambda r: r.state.years_with_dates,
+           numeric=True, centered=True, tip="Лет, где посчитана хотя бы одна дата перехода"),
+    _no_data_column(tr.SPRING, "«Нет данных»\nвёсен"),
+    _no_data_column(tr.AUTUMN, "«Нет данных»\nосеней"),
     Column("Пересчитано в последний раз", lambda r: r.state.recalculated or _NO_VALUE,
            lambda r: r.state.recalculated,
            tip="Какие сезоны пересчитаны при последнем расчёте станции"),
 ]
+
+
+_NO_DATA_COLUMNS = (4, 5)
 
 
 def summary_text(states: list[tr.StationState], recalculated: int) -> str:
@@ -315,10 +465,17 @@ def summary_text(states: list[tr.StationState], recalculated: int) -> str:
 
 
 class TransitionsDialog(QDialog):
-    def __init__(self, engine: Engine, parent: QWidget | None = None, run_async: bool = True) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        parent: QWidget | None = None,
+        run_async: bool = True,
+        open_guide: Callable[[str], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         enable_min_max_buttons(self)
         self.engine = engine
+        self._open_guide = open_guide  # открыть путеводитель на разделе; None — ссылки нет
         self._run_async = run_async  # False — расчёт в том же потоке (тесты)
         self._preferences = Preferences.next_to_database(engine.url.database)
         self._calculated = False
@@ -363,9 +520,25 @@ class TransitionsDialog(QDialog):
         row.addWidget(self.export_btn)
         layout.addWidget(card)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         self.station_title = QLabel("")
         self.station_title.setObjectName("stationTitle")
-        layout.addWidget(self.station_title)
+        title_row.addWidget(self.station_title)
+        title_row.addStretch(1)
+        legend = QLabel(_LEGEND)
+        legend.setObjectName("methodsLegend")
+        title_row.addWidget(legend)
+        self.methods_help = HelpBadge()
+        self.methods_help.set_help("прочтения метода", METHODS_HELP, width=440)
+        title_row.addWidget(self.methods_help)
+        if self._open_guide is not None:
+            guide_link = QLabel("<a href='guide'>Подробнее в путеводителе</a>")
+            guide_link.setObjectName("methodsLegend")
+            guide_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            guide_link.linkActivated.connect(lambda _href: self._open_guide(GUIDE_SECTION))
+            title_row.addWidget(guide_link)
+        layout.addLayout(title_row)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -413,6 +586,15 @@ class TransitionsDialog(QDialog):
         self.summary.setObjectName("calcSummary")
         layout.addWidget(self.summary)
         self.state_table, self.state_model = _make_table(STATE_COLUMNS, page, stretch_column=6)
+        # Сезоны "нет данных" — в столбик, в столбцах постоянной ширины с
+        # переносом: строка растёт вниз, а не вширь
+        self.state_table.setWordWrap(True)
+        header = self.state_table.horizontalHeader()
+        for column in _NO_DATA_COLUMNS:
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+            header.resizeSection(column, 240)
+            self.state_table.setItemDelegateForColumn(column, RichTextDelegate(self.state_table))
+        self.state_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.state_table, stretch=1)
         return page
 
@@ -471,6 +653,9 @@ class TransitionsDialog(QDialog):
         self.periods_model.set_table(periods_table(data, days))
         for view in (self.transitions_view, self.periods_view):
             view.horizontalHeader().updateGeometry()
+            if view.model().rowCount():
+                # Строка средних — подпись в две строки
+                view.resizeRowToContents(view.model().rowCount() - 1)
         self.station_title.setText(self.station_combo.currentText())
         for stack in self._stacks:
             stack.setCurrentIndex(1)

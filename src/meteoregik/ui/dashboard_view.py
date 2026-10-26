@@ -86,6 +86,7 @@ from meteoregik.ui.dashboard_charts import (
 from meteoregik.ui.dashboard_precip_tab import PrecipitationTab
 from meteoregik.ui.dashboard_source_tab import SourceDataTab
 from meteoregik.ui.dashboard_widgets import (
+    HELP_QSS,
     CardText,
     GrooveDivider as _GrooveDivider,
     StatCard as _StatCard,
@@ -128,32 +129,9 @@ QFrame#heatmapMode {{
 QFrame#heatmapMode QRadioButton {{ color: {HEATMAP_MODE_TEXT}; font-weight: 600; }}
 QLabel#chartTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
 QLabel#chartNote {{ color: {theme.TEXT_SECONDARY}; font-size: 12px; }}
-QToolButton#helpBadge {{
-    color: {theme.TEXT_SECONDARY};
-    background: {theme.INPUT_BG};
-    border: 1px solid {theme.TEXT_SECONDARY};
-    border-radius: 10px;
-    font-size: 12px;
-    font-weight: 700;
-    min-width: 18px; max-width: 18px;
-    min-height: 18px; max-height: 18px;
-    padding: 0;
-}}
-QToolButton#helpBadge:hover {{ background: {theme.HEADER_BG}; color: {theme.TEXT_PRIMARY}; }}
-QToolButton#helpBadge:focus {{
-    border: {theme.FOCUS_RING_WIDTH}px solid {theme.FOCUS_RING};
-    color: {theme.TEXT_PRIMARY};
-}}
 QScrollArea {{ background: transparent; border: none; }}
 QWidget#scrollViewport, QWidget#scrollContent {{ background: transparent; }}
-QToolTip {{
-    color: {theme.TEXT_PRIMARY};
-    background: {theme.INPUT_BG};
-    border: 1px solid {theme.BORDER};
-    padding: 6px;
-    font-size: 12px;
-}}
-"""
+""" + HELP_QSS
 
 # Подсказки "?" — как посчитан показатель карточки. Описывают фактический
 # расчёт (reports/dashboard_data.py, calculations/temperature.py), а не

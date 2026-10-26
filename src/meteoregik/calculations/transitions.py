@@ -3,10 +3,11 @@
 2026-10-25, правила согласованы с пользователем 2026-10-26; разбор — в
 .claude/docs/task.md, "корректировки").
 
-Метод Д. А. Педя (метод сумм отклонений) в формулировке Гидрометцентра:
-устойчивый переход — день, после которого обратного перехода не было, а
-если был, то накопленное до него тепло (весной) больше холода возврата.
-По шагам, весна:
+Метод Д. А. Педя (метод сумм отклонений), два прочтения — оба считаются и
+хранятся (корректировка 2026-10-27), экраны показывают их через слэш.
+Устойчивый переход — день, после которого обратного перехода не было, а
+если был, то тепло (весной) больше холода возврата. По шагам, весна, прочтение
+Гидрометцентра ('hmc'):
 - отклонение дня — t − порог; дни подряд одного знака — период: тёплый
   (t > порог) или холодный (t ≤ порог — ровно на пороге значит "не выше");
 - кандидат — первый день тёплого периода. От него копятся все
@@ -14,6 +15,10 @@
   накопленное должно быть строго больше суммы этого периода по модулю.
   Отрицательные отклонения прежних похолоданий из накопленного не вычитаются;
 - дата перехода — первый кандидат, выдержавший все похолодания окна.
+Прочтение справочника "Климат России" ('kr') отличается одним: с каждым
+последующим похолоданием сравнивается сумма только самого тёплого периода
+кандидата, без тепла следующих периодов. Где тепло идёт с перерывами,
+дата по "Климату России" позже (Мосальск, весна 2014, 10 °C: 19.04 и 08.05).
 Осень — то же с обратными знаками: кандидат — первый день холодного
 периода, копится холод (порог − t), сравнивается с каждым последующим
 тёплым периодом.
@@ -25,10 +30,16 @@
 
 Окно поиска: весна года — 1 января – 31 июля, осень года — 1 июля – конец
 февраля следующего года (на юге переход через 0 °C бывает в январе).
-Дата считается, только если все месяцы окна полные по правилу ВМО "3/5"
-(anomalies.month_is_complete — то же правило, что у норм); иначе
-'no_data'. Дни без данных внутри полного месяца просто пропускаются:
-периоды по обе стороны пропуска не рвутся.
+Полнота — по правилу ВМО "3/5" (anomalies.month_is_complete — то же
+правило, что у норм), но не всего окна, а только месяцев от начала окна до
+месяца после найденной даты (решение пользователя 2026-10-27 — наше
+локальное допущение: строго по методу похолодание в пропущенные дни после
+даты могло бы её отменить, но пропуски через месяцы после перехода этого
+практически не могут; иначе неполный июль отменял апрельские переходы).
+Неполный месяц в этой части окна — 'no_data'. Если перехода не нашлось
+("не было"), полными должны быть все месяцы окна. Порог и прочтение
+проверяются каждый отдельно. Дни без данных внутри полного месяца просто
+пропускаются: периоды по обе стороны пропуска не рвутся.
 
 Когда считается. Не при заливке: calculations/recompute.py только удаляет
 строки transition_seasons у сезонов, в окно которых попали изменённые дни
@@ -66,9 +77,14 @@ STATUS_DATE = "date"
 STATUS_NONE = "none"
 STATUS_NO_DATA = "no_data"
 
+METHOD_HMC = "hmc"  # Гидрометцентр: копится всё тепло от кандидата
+METHOD_KR = "kr"  # "Климат России": сравнивается только период кандидата
+METHODS: tuple[str, ...] = (METHOD_HMC, METHOD_KR)
+METHOD_NAMES = {METHOD_HMC: "Гидрометцентр", METHOD_KR: "«Климат России»"}
+
 # Меняется при изменении правил: сезоны, посчитанные по старым, считаются
-# требующими расчёта.
-RULE_VERSION = 1
+# требующими расчёта. 2 — два прочтения и полнота до месяца после даты.
+RULE_VERSION = 2
 
 SeasonKey = tuple[int, str]  # (год, сезон)
 
@@ -103,13 +119,32 @@ def window_months(year: int, season: str) -> list[tuple[int, int]]:
     return months
 
 
+def month_days(year: int, month: int, days: dict[date, float] | set[date]) -> set[int]:
+    """Числа месяца, за которые есть данные."""
+    return {day for day in range(1, monthrange(year, month)[1] + 1) if date(year, month, day) in days}
+
+
+def incomplete_window_months(year: int, season: str, days: dict[date, float] | set[date]) -> list[tuple[int, int]]:
+    """Месяцы окна, неполные по правилу "3/5"."""
+    return [
+        (y, m) for y, m in window_months(year, season)
+        if not month_is_complete(month_days(y, m, days), monthrange(y, m)[1])
+    ]
+
+
 def window_is_complete(year: int, season: str, days: dict[date, float]) -> bool:
     """Все месяцы окна полные по правилу "3/5"."""
-    for y, m in window_months(year, season):
-        present = {day for day in range(1, monthrange(y, m)[1] + 1) if date(y, m, day) in days}
-        if not month_is_complete(present, monthrange(y, m)[1]):
-            return False
-    return True
+    return not incomplete_window_months(year, season, days)
+
+
+def required_months(year: int, season: str, day: date | None) -> list[tuple[int, int]]:
+    """Месяцы окна, которые должны быть полными для даты day: от начала окна
+    до месяца после её месяца; перехода нет (None) — всё окно."""
+    months = window_months(year, season)
+    if day is None:
+        return months
+    position = months.index((day.year, day.month))
+    return months[: position + 2]
 
 
 # --- метод сумм отклонений ---
@@ -138,7 +173,9 @@ def _runs(values: list[tuple[date, float]], threshold: float, season: str) -> li
     return runs
 
 
-def find_transition(values: list[tuple[date, float]], threshold: float, season: str) -> date | None:
+def find_transition(
+    values: list[tuple[date, float]], threshold: float, season: str, method: str = METHOD_HMC
+) -> date | None:
     """Дата устойчивого перехода по суточным значениям окна (по порядку дат,
     без пропусков в списке); None — перехода не было."""
     runs = _runs(values, threshold, season)
@@ -149,7 +186,9 @@ def find_transition(values: list[tuple[date, float]], threshold: float, season: 
         stable = True
         for later in runs[index:]:
             if later.candidate:
-                accumulated += later.weight
+                # "Климат России" — только сумма самого периода кандидата
+                if method == METHOD_HMC or later is run:
+                    accumulated += later.weight
             elif accumulated <= later.weight:
                 stable = False
                 break
@@ -166,16 +205,20 @@ class Transition:
     day: date | None = None
 
 
-def season_transitions(year: int, season: str, days: dict[date, float]) -> dict[int, Transition]:
+def season_transitions(
+    year: int, season: str, days: dict[date, float], method: str = METHOD_HMC
+) -> dict[int, Transition]:
     """Переходы сезона через все пороги по суточным средним станции."""
-    if not window_is_complete(year, season, days):
-        return {threshold: Transition(STATUS_NO_DATA) for threshold in THRESHOLDS}
     first, last = season_window(year, season)
+    incomplete = set(incomplete_window_months(year, season, days))
     values = sorted((day, value) for day, value in days.items() if first <= day <= last)
     result = {}
     for threshold in THRESHOLDS:
-        day = find_transition(values, threshold, season)
-        result[threshold] = Transition(STATUS_DATE, day) if day else Transition(STATUS_NONE)
+        day = find_transition(values, threshold, season, method)
+        if incomplete.intersection(required_months(year, season, day)):
+            result[threshold] = Transition(STATUS_NO_DATA)
+        else:
+            result[threshold] = Transition(STATUS_DATE, day) if day else Transition(STATUS_NONE)
     return result
 
 
@@ -291,11 +334,12 @@ def recalculate_seasons(engine: Engine, wmo_index: int, seasons: list[SeasonKey]
     days = fetch_daily_means(engine, wmo_index)
     rows = []
     for year, season in seasons:
-        for threshold, transition in season_transitions(year, season, days).items():
-            rows.append({
-                "wmo_index": wmo_index, "year": year, "season": season, "threshold": threshold,
-                "status": transition.status, "transition_date": transition.day,
-            })
+        for method in METHODS:
+            for threshold, transition in season_transitions(year, season, days, method).items():
+                rows.append({
+                    "wmo_index": wmo_index, "year": year, "season": season, "threshold": threshold,
+                    "method": method, "status": transition.status, "transition_date": transition.day,
+                })
     now = datetime.now()
     keys = tuple_(temperature_transitions.c.year, temperature_transitions.c.season).in_(seasons)
     with engine.begin() as conn:
@@ -359,17 +403,17 @@ def ensure_fresh(
 
 @dataclass(frozen=True)
 class StationTransitions:
-    """Сохранённые переходы станции: (год, сезон, порог) -> переход."""
+    """Сохранённые переходы станции: (год, сезон, порог, прочтение) -> переход."""
 
     years: list[int]
-    transitions: dict[tuple[int, str, int], Transition]
+    transitions: dict[tuple[int, str, int, str], Transition]
 
-    def get(self, year: int, season: str, threshold: int) -> Transition | None:
-        return self.transitions.get((year, season, threshold))
+    def get(self, year: int, season: str, threshold: int, method: str = METHOD_HMC) -> Transition | None:
+        return self.transitions.get((year, season, threshold, method))
 
-    def duration(self, year: int, threshold: int) -> int | None:
+    def duration(self, year: int, threshold: int, method: str = METHOD_HMC) -> int | None:
         """Длительность периода выше порога, дни: осенняя дата − весенняя."""
-        spring, autumn = self.get(year, SPRING, threshold), self.get(year, AUTUMN, threshold)
+        spring, autumn = self.get(year, SPRING, threshold, method), self.get(year, AUTUMN, threshold, method)
         if spring is None or autumn is None or spring.day is None or autumn.day is None:
             return None
         return (autumn.day - spring.day).days
@@ -380,13 +424,17 @@ def load_station_transitions(engine: Engine, wmo_index: int) -> StationTransitio
         temperature_transitions.c.year,
         temperature_transitions.c.season,
         temperature_transitions.c.threshold,
+        temperature_transitions.c.method,
         temperature_transitions.c.status,
         temperature_transitions.c.transition_date,
     ).where(temperature_transitions.c.wmo_index == wmo_index)
     with engine.connect() as conn:
         rows = conn.execute(stmt).all()
-    transitions = {(year, season, threshold): Transition(status, day) for year, season, threshold, status, day in rows}
-    return StationTransitions(sorted({year for year, _, _ in transitions}), transitions)
+    transitions = {
+        (year, season, threshold, method): Transition(status, day)
+        for year, season, threshold, method, status, day in rows
+    }
+    return StationTransitions(sorted({key[0] for key in transitions}), transitions)
 
 
 # --- средняя многолетняя дата ---
@@ -440,11 +488,13 @@ def _none_years(standard: bool, none_years: list[int]) -> int:
     return sum(NORM_BASE_FIRST_YEAR <= year <= NORM_BASE_LAST_YEAR for year in none_years)
 
 
-def mean_date(data: StationTransitions, season: str, threshold: int) -> MeanValue | None:
+def mean_date(
+    data: StationTransitions, season: str, threshold: int, method: str = METHOD_HMC
+) -> MeanValue | None:
     dated = {}
     none_years = []
     for year in data.years:
-        transition = data.get(year, season, threshold)
+        transition = data.get(year, season, threshold, method)
         if transition is None:
             continue
         if transition.day is not None:
@@ -460,13 +510,18 @@ def mean_date(data: StationTransitions, season: str, threshold: int) -> MeanValu
     )
 
 
-def mean_duration(data: StationTransitions, threshold: int) -> MeanValue | None:
-    durations = {year: value for year in data.years if (value := data.duration(year, threshold)) is not None}
+def mean_duration(data: StationTransitions, threshold: int, method: str = METHOD_HMC) -> MeanValue | None:
+    durations = {
+        year: value for year in data.years if (value := data.duration(year, threshold, method)) is not None
+    }
     if not durations:
         return None
     none_years = [
         year for year in data.years
-        if any((t := data.get(year, season, threshold)) is not None and t.status == STATUS_NONE for season in SEASONS)
+        if any(
+            (t := data.get(year, season, threshold, method)) is not None and t.status == STATUS_NONE
+            for season in SEASONS
+        )
     ]
     standard, years = _base_years(sorted(durations))
     return MeanValue(
@@ -479,13 +534,30 @@ def mean_duration(data: StationTransitions, threshold: int) -> MeanValue | None:
 
 
 @dataclass(frozen=True)
+class NoDataSeason:
+    """Сезон, где хотя бы одна дата — "нет данных", и неполные месяцы его
+    окна: (год, месяц, дней с данными, дней в месяце)."""
+
+    year: int
+    months: list[tuple[int, int, int, int]]
+    empty: bool = False  # данных нет ни за один день окна — перечислять месяцы незачем
+
+
+@dataclass(frozen=True)
 class StationState:
     wmo_index: int
     period: tuple[date, date]
     calculated_at: datetime | None
     recalculated: str
-    years_with_dates: int  # лет, где есть хотя бы одна дата перехода
-    no_data_seasons: dict[str, int]  # сезонов "недостаточно данных" по виду сезона
+    years_with_dates: int  # лет, где есть хотя бы одна дата перехода (любым прочтением)
+    no_data_seasons: dict[str, list[NoDataSeason]]  # сезоны "нет данных" по виду сезона, по годам
+
+
+def _station_days(conn: Connection, wmo_index: int) -> set[date]:
+    stmt = select(computed_indicators.c.period_start).where(
+        computed_indicators.c.wmo_index == wmo_index, _day_avg_filter()
+    )
+    return set(conn.scalars(stmt))
 
 
 def station_states(engine: Engine) -> list[StationState]:
@@ -499,18 +571,26 @@ def station_states(engine: Engine) -> list[StationState]:
                 .group_by(temperature_transitions.c.wmo_index)
             ).all()
         )
-        no_data: dict[int, dict[str, int]] = {}
         stmt = (
-            select(
-                temperature_transitions.c.wmo_index,
-                temperature_transitions.c.season,
-                func.count(temperature_transitions.c.year.distinct()),
-            )
+            select(temperature_transitions.c.wmo_index, temperature_transitions.c.year, temperature_transitions.c.season)
             .where(temperature_transitions.c.status == STATUS_NO_DATA)
-            .group_by(temperature_transitions.c.wmo_index, temperature_transitions.c.season)
+            .distinct()
+            .order_by(temperature_transitions.c.wmo_index, temperature_transitions.c.year)
         )
-        for wmo, season, count in conn.execute(stmt):
-            no_data.setdefault(wmo, {})[season] = count
+        no_data_keys: dict[int, list[SeasonKey]] = {}
+        for wmo, year, season in conn.execute(stmt):
+            no_data_keys.setdefault(wmo, []).append((year, season))
+        # Неполные месяцы — по суточным данным, только у станций с "нет данных"
+        no_data: dict[int, dict[str, list[NoDataSeason]]] = {}
+        for wmo, keys in no_data_keys.items():
+            days = _station_days(conn, wmo)
+            for year, season in keys:
+                months = [
+                    (y, m, len(month_days(y, m, days)), monthrange(y, m)[1])
+                    for y, m in incomplete_window_months(year, season, days)
+                ]
+                empty = len(months) == len(window_months(year, season)) and not any(m[2] for m in months)
+                no_data.setdefault(wmo, {}).setdefault(season, []).append(NoDataSeason(year, months, empty))
     result = []
     for wmo, period in sorted(periods.items()):
         state = states.get(wmo)

@@ -1,6 +1,6 @@
-"""Даты устойчивого перехода температуры: метод сумм отклонений (прочтение
-Гидрометцентра), окно поиска и полнота, что хранится и когда сезоны
-пересчитываются."""
+"""Даты устойчивого перехода температуры: метод сумм отклонений (прочтения
+Гидрометцентра и "Климата России"), окно поиска и полнота, что хранится и
+когда сезоны пересчитываются."""
 
 from __future__ import annotations
 
@@ -56,6 +56,16 @@ def test_accumulated_warmth_forgives_a_return_of_cold():
     days = _series(start, values)
 
     assert tr.find_transition(days, 10, tr.SPRING) == date(2014, 4, 19)
+    # "Климат России": 18.3 < 23.6 и 21.4 < 23.6 — переход после второго похолодания
+    assert tr.find_transition(days, 10, tr.SPRING, tr.METHOD_KR) == date(2014, 5, 8)
+
+
+def test_readings_agree_when_each_cold_spell_follows_one_warm_period():
+    """Мосальск 2010 из task.md: перед каждым похолоданием — один тёплый
+    период, оба прочтения дают одну дату."""
+    days = _series(date(2020, 3, 1), [-5.0] * 10 + [2.0] * 3 + [-1.0] * 2 + [3.0] * 30)
+
+    assert tr.find_transition(days, 0, tr.SPRING, tr.METHOD_KR) == tr.find_transition(days, 0, tr.SPRING)
 
 
 def test_return_of_cold_larger_than_accumulated_warmth_moves_the_date():
@@ -147,14 +157,49 @@ def test_smooth_cycle_crosses_each_threshold_once():
         )
 
 
-def test_incomplete_month_in_the_window_means_no_data():
-    """Июль — в окне и весны, и осени: 6 пропущенных дней (больше 5) делают
-    "недостаточно данных" оба сезона по всем порогам."""
+def test_only_months_up_to_the_one_after_the_date_must_be_complete():
+    """Июль неполный (6 пропусков больше 5). Весной он нужен только переходу
+    через 15 °C (июнь — следующий за ним месяц июль), переходы в марте–мае
+    остаются; осенью июль — начало окна, он нужен всем порогам."""
     gap = frozenset(date(2020, 7, day) for day in (1, 5, 9, 13, 17, 21))
     days = _annual_cycle(date(2020, 1, 1), date(2021, 2, 28), skip=gap)
 
-    for season in tr.SEASONS:
-        assert {t.status for t in tr.season_transitions(2020, season, days).values()} == {tr.STATUS_NO_DATA}
+    for method in tr.METHODS:
+        spring = tr.season_transitions(2020, tr.SPRING, days, method)
+        autumn = tr.season_transitions(2020, tr.AUTUMN, days, method)
+        assert {t: spring[t].status for t in tr.THRESHOLDS} == {
+            0: tr.STATUS_DATE, 5: tr.STATUS_DATE, 10: tr.STATUS_DATE, 15: tr.STATUS_NO_DATA,
+        }
+        assert {t.status for t in autumn.values()} == {tr.STATUS_NO_DATA}
+
+
+def test_incomplete_month_before_the_date_means_no_data():
+    gap = frozenset(date(2020, 1, day) for day in range(1, 11))
+    days = _annual_cycle(date(2020, 1, 1), date(2020, 12, 31), skip=gap)
+
+    assert {t.status for t in tr.season_transitions(2020, tr.SPRING, days).values()} == {tr.STATUS_NO_DATA}
+
+
+def test_no_transition_needs_the_whole_window():
+    """"Перехода не было" — утверждение про весь сезон: при неполном июле
+    его не сказать."""
+    days = {day: -5.0 for day in (date(2020, 1, 1) + timedelta(days=n) for n in range(213))}
+    assert tr.season_transitions(2020, tr.SPRING, days)[0].status == tr.STATUS_NONE
+
+    for day in (1, 5, 9, 13, 17, 21):
+        del days[date(2020, 7, day)]
+    assert tr.season_transitions(2020, tr.SPRING, days)[0].status == tr.STATUS_NO_DATA
+
+
+@pytest.mark.parametrize(("day", "last"), [
+    (date(2020, 4, 19), (2020, 5)),
+    (date(2020, 7, 2), (2020, 7)),  # месяца после даты в окне нет
+    (None, (2020, 7)),
+])
+def test_required_months(day, last):
+    months = tr.required_months(2020, tr.SPRING, day)
+
+    assert (months[0], months[-1]) == ((2020, 1), last)
 
 
 def test_short_gap_inside_a_complete_month_is_skipped():
@@ -171,9 +216,9 @@ def test_short_gap_inside_a_complete_month_is_skipped():
 # --- средняя многолетняя дата ---
 
 
-def _data(dates: dict[tuple[int, str, int], date | str]) -> tr.StationTransitions:
+def _data(dates: dict[tuple[int, str, int], date | str], method: str = tr.METHOD_HMC) -> tr.StationTransitions:
     transitions = {
-        key: tr.Transition(tr.STATUS_DATE, value) if isinstance(value, date) else tr.Transition(value)
+        (*key, method): tr.Transition(tr.STATUS_DATE, value) if isinstance(value, date) else tr.Transition(value)
         for key, value in dates.items()
     }
     return tr.StationTransitions(sorted({year for year, _, _ in dates}), transitions)
@@ -256,13 +301,15 @@ def test_ensure_fresh_stores_all_seasons_once(engine):
     done = tr.ensure_fresh(engine)
 
     assert [s.wmo_index for s in done] == [STATION]
-    assert _count(engine, temperature_transitions) == 6 * len(tr.THRESHOLDS)
+    assert _count(engine, temperature_transitions) == 6 * len(tr.THRESHOLDS) * len(tr.METHODS)
     assert tr.ensure_fresh(engine) == []
     data = tr.load_station_transitions(engine, STATION)
     assert data.years == [2019, 2020, 2021]
-    assert data.get(2020, tr.SPRING, 10).status == tr.STATUS_DATE
-    # Осень 2021: в окне январь–февраль 2022, которых нет
-    assert data.get(2021, tr.AUTUMN, 0).status == tr.STATUS_NO_DATA
+    for method in tr.METHODS:
+        assert data.get(2020, tr.SPRING, 10, method).status == tr.STATUS_DATE
+        # Осень 2021: января–февраля 2022 нет, но для перехода через 0 °C в
+        # ноябре нужны только месяцы по декабрь
+        assert data.get(2021, tr.AUTUMN, 0, method).status == tr.STATUS_DATE
 
 
 def test_recompute_marks_only_seasons_whose_window_contains_the_day(engine):
@@ -310,7 +357,7 @@ def test_station_states(engine):
 
     assert state.period == (date(2019, 1, 1), date(2021, 12, 31))
     assert state.years_with_dates == 3
-    assert state.no_data_seasons == {tr.AUTUMN: 1}
+    assert state.no_data_seasons == {}
     assert state.recalculated == "весна и осень 2019, весна и осень 2020, весна и осень 2021"
 
 
@@ -326,3 +373,30 @@ def test_migration_from_version_8_creates_tables(tmp_path):
 
     tables = set(inspect(engine).get_table_names())
     assert {"temperature_transitions", "transition_seasons", "transition_state"} <= tables
+
+
+def test_migration_10_adds_method_and_forgets_calculated_seasons(tmp_path):
+    engine = get_engine(tmp_path / "v9.sqlite3")
+    run_migrations(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE temperature_transitions")
+        conn.exec_driver_sql(
+            "CREATE TABLE temperature_transitions (id INTEGER PRIMARY KEY, wmo_index INTEGER NOT NULL, "
+            "year INTEGER NOT NULL, season TEXT NOT NULL, threshold INTEGER NOT NULL, status TEXT NOT NULL, "
+            "transition_date DATE, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO temperature_transitions (wmo_index, year, season, threshold, status) "
+            "VALUES (27707, 2020, 'spring', 0, 'none')"
+        )
+        conn.execute(transition_seasons.insert().values(
+            wmo_index=STATION, year=2020, season=tr.SPRING, calculated_at=datetime(2026, 10, 26), rule_version=1
+        ))
+        conn.execute(schema_version.update().values(version=9))
+
+    run_migrations(engine)
+
+    columns = {column["name"] for column in inspect(engine).get_columns("temperature_transitions")}
+    assert "method" in columns
+    assert _count(engine, temperature_transitions) == 0
+    assert _count(engine, transition_seasons) == 0

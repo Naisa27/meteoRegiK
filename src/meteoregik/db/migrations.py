@@ -67,6 +67,12 @@ calculations/transitions.py). Пересчёта при запуске нет: �
 расчёт" — даты досчитываются при первом открытии окна "Переходы
 температуры" (решение пользователя 2026-10-26).
 
+Миграция 10 — переходы считаются двумя прочтениями метода (Гидрометцентр и
+"Климат России", корректировка 2026-10-27): temperature_transitions
+пересоздаётся со столбцом method, посчитанные сезоны забываются. Таблица —
+производные данные, пересчёт — так же при открытии окна, без окна
+обновления при запуске.
+
 Обновление у пользователя (решение 2026-10-11). Миграции с пересчётом
 данных перечислены в DATA_UPDATES: что именно досчитывается, словами для
 пользователя. Если такие ждут применения и в базе есть данные
@@ -102,7 +108,7 @@ from meteoregik.db.schema import (
     transition_state,
 )
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
@@ -189,6 +195,8 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_8(conn, progress)
             if version < 9:
                 _migrate_to_9(conn)
+            if version < 10:
+                _migrate_to_10(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -244,6 +252,12 @@ def _migrate_to_9(conn: Connection) -> None:
     metadata.create_all(
         conn, tables=[temperature_transitions, transition_seasons, transition_state], checkfirst=True
     )
+
+
+def _migrate_to_10(conn: Connection) -> None:
+    temperature_transitions.drop(conn, checkfirst=True)
+    temperature_transitions.create(conn)
+    conn.execute(transition_seasons.delete())
 
 
 def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:
