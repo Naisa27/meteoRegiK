@@ -500,11 +500,14 @@ class DashboardDialog(QDialog):
         run_async: bool = True,
         wmo_index: int | None = None,
         tab: str = TAB_TEMPERATURE,
+        open_guide: Callable[[str], None] | None = None,
     ) -> None:
         """wmo_index — станция, которую сразу выбрать и показать за весь её
         архив (переход из карточки станции на экране "Карта"); tab — какую
-        вкладку открыть (TAB_*): с карты осадков — "Осадки"."""
+        вкладку открыть (TAB_*): с карты осадков — "Осадки"; open_guide —
+        открыть путеводитель на разделе (ссылки на вкладках), None — ссылок нет."""
         super().__init__(parent)
+        self._open_guide = open_guide
         enable_min_max_buttons(self)
         self.engine = engine
         # run_async=False — расчёт в том же потоке (тесты).
@@ -546,7 +549,7 @@ class DashboardDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._build_temperature_tab(), TAB_TEMPERATURE)
-        self.precipitation_tab = PrecipitationTab(_START_HINT)
+        self.precipitation_tab = PrecipitationTab(_START_HINT, open_guide=self._open_guide)
         self.tabs.addTab(self.precipitation_tab, TAB_PRECIPITATION)
         self.source_tab = SourceDataTab(self.engine, run_async=self._run_async)
         self.tabs.addTab(self.source_tab, TAB_SOURCE)

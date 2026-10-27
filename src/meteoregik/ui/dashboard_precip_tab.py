@@ -10,12 +10,18 @@ ui/dashboard_precip_charts.py.
 ("112 % нормы (+68.0 мм)"), значок "?" объясняет расчёт. Карточка полноты
 шире остальных: в ней два вида пропусков — пропущенные дни и дни с
 пропущенным сроком наблюдения (решение пользователя 2026-10-12).
+
+Под ними — блок "Осадки по периодам переходов температуры" (корректировка
+2026-10-27): три графика ui/dashboard_period_charts.py и общий для них
+переключатель прочтений метода; у третьего — ещё выбор периода.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -41,6 +47,7 @@ from meteoregik.reports.dashboard_data import (
     MONTHS_NOMINATIVE,
     format_signed,
 )
+from meteoregik.calculations.transitions import METHOD_HMC, METHOD_KR, METHOD_NAMES, METHODS
 from meteoregik.reports.precipitation_data import (
     WET_DAY_MM,
     DecadeSum,
@@ -59,9 +66,17 @@ from meteoregik.ui.dashboard_precip_charts import (
     PrecipitationHeatmap,
     SeasonsChart,
 )
+from meteoregik.reports.transition_precipitation import COLD, KIND_NAMES, KINDS
+from meteoregik.ui.dashboard_period_charts import (
+    VISIBLE_YEARS,
+    NestedPeriodsChart,
+    PeriodSeriesChart,
+    WarmColdChart,
+)
 from meteoregik.ui.dashboard_widgets import (
     CardText,
     GrooveDivider,
+    HelpBadge,
     StatCard,
     format_count,
     format_day,
@@ -184,6 +199,72 @@ HELP_COMPLETENESS = (
     "по одному сроку и может быть занижена. Для файлов ГГ сроков нет: там готовые "
     "суточные суммы."
 )
+
+
+# Блок "Осадки по периодам переходов температуры". Подсказка описывает
+# фактический расчёт (reports/transition_precipitation.py) — менять вместе с ним.
+PERIODS_TITLE = "Осадки по периодам переходов температуры"
+GUIDE_SECTION = "dashboard"
+HELP_PERIODS = (
+    "<b>Какие периоды.</b> Границы периодов — даты устойчивого перехода средней суточной "
+    "температуры, те же, что в окне «Переходы температуры». Тёплый период — от весеннего "
+    "перехода через 0 °C до осеннего, вегетационный — через 5 °C, активной вегетации — через "
+    "10 °C, летний — через 15 °C. Холодный период — от осеннего перехода через 0 °C одного "
+    "года до весеннего перехода следующего года, поэтому он подписан двумя годами "
+    "(«2014/2015»). Первый день периода — день перехода, последний — день перед "
+    "переходом в конце периода.\n\n"
+    "Если в каком-то году одной из двух дат нет («не было» или «нет данных»), периода в "
+    "этом году нет; почему — видно в подсказке на графиках.\n\n"
+    "<b>Два значения.</b> Даты перехода считаются двумя прочтениями метода Педя: "
+    "<b>Гидрометцентр</b> и <b>«Климат России»</b>. Даты у них бывают разными, поэтому "
+    "разные и границы периодов, и суммы осадков. Переключатель над графиками показывает "
+    "оба прочтения или одно из них.\n\n"
+    "<b>Сумма осадков</b> — сумма суточных сумм за дни периода, за которые есть данные. "
+    "Если в периоде есть дни без данных об осадках, сумма может быть занижена: такая точка "
+    "пустая, столбик или прямоугольник заштрихован, а число пропущенных дней — в "
+    "подсказке.\n\n"
+    "<b>Выбранный период дашборда</b> расширяется до целых периодов: показываются все "
+    "периоды, которые его задевают, с полной суммой.\n\n"
+    "<b>Средняя многолетняя сумма</b> (на третьем графике) — средняя за 1991–2020, если "
+    "таких лет не меньше 24, иначе — по всему архиву станции. В неё входят только периоды "
+    "без пропущенных дней. Своя у каждого прочтения."
+)
+METHOD_MODES: tuple[tuple[str, ...], ...] = (METHODS, (METHOD_HMC,), (METHOD_KR,))
+_METHOD_MODE_LABELS = ["Оба прочтения", METHOD_NAMES[METHOD_HMC], METHOD_NAMES[METHOD_KR]]
+# Третий график: тёплый, холодный, затем вложенные — по порядку порогов
+SERIES_KINDS: tuple[str, ...] = KINDS
+_SERIES_LABELS = ["Тёплый", "Холодный", "Вегетационный", "Активной вегетации", "Летний"]
+_METHODS_LEGEND = (
+    "Фиолетовые круг и сплошная линия — Гидрометцентр, оранжевые квадрат и пунктир — "
+    "«Климат России»."
+)
+_SCROLL_NOTE = (
+    f"Видно {VISIBLE_YEARS} лет; остальные — полосой прокрутки под графиком или колесом мыши "
+    "с нажатым Shift."
+)
+_WARM_COLD_NOTE = (
+    "Голубой фон — холодный период (ниже 0 °C), розовый — тёплый (выше 0 °C); при обоих "
+    "прочтениях фон — по датам Гидрометцентра. Точка посередине периода — сумма осадков за "
+    "него; пустая точка — в периоде есть дни без данных. " + _SCROLL_NOTE
+)
+_NESTED_NOTE = (
+    "Прямоугольник — период: по ширине от весенней до осенней даты перехода, по высоте — "
+    "сумма осадков. Сзади тёплый период, впереди летний. При обоих прочтениях залиты "
+    "периоды по Гидрометцентру, пунктирный контур — по «Климату России». Штриховка — в "
+    "периоде есть дни без данных. " + _SCROLL_NOTE
+)
+_SERIES_NOTE = (
+    "Линии — суммы за выбранный период по годам, пунктирные горизонтали того же цвета — "
+    "средние многолетние суммы каждого прочтения."
+)
+_SERIES_SHORT_NOTE = (
+    f"Период дашборда короче {MIN_YEAR_RECORD_MONTHS} месяцев, поэтому столбики: у каждого "
+    "года — по столбику на прочтение. Пунктирные горизонтали — средние многолетние суммы."
+)
+
+
+def _horizontal_divider() -> GrooveDivider:
+    return GrooveDivider(orientation=Qt.Orientation.Horizontal)
 
 
 def _join_limited(items: list[str], sep: str, rest_unit: str, limit: int) -> str:
@@ -396,8 +477,16 @@ _INCOMPLETE_DECADE_NOTE = (
 
 
 class PrecipitationTab(QWidget):
-    def __init__(self, start_hint: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        start_hint: str,
+        parent: QWidget | None = None,
+        open_guide: Callable[[str], None] | None = None,
+    ) -> None:
+        """open_guide — открыть путеводитель на разделе (ссылка у блока
+        периодов переходов); None — ссылки нет."""
         super().__init__(parent)
+        self._open_guide = open_guide
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(10)
@@ -469,6 +558,7 @@ class PrecipitationTab(QWidget):
         self.course_chart = AnnualCourseChart()
         bottom.addLayout(self._course_block(), stretch=1)
         layout.addLayout(bottom, stretch=1)
+        layout.addLayout(self._periods_block())
         return content
 
     @staticmethod
@@ -544,6 +634,80 @@ class PrecipitationTab(QWidget):
     def _on_year_changed(self, index: int) -> None:
         self.course_chart.set_year(self.year_combo.itemData(index))
 
+    def _periods_block(self) -> QVBoxLayout:
+        """Заголовок с "?", ссылкой в путеводитель и переключателем
+        прочтений (общим для трёх графиков), под ним графики друг под
+        другом — во всю ширину: это оси времени, им нужна длина."""
+        block = QVBoxLayout()
+        block.setSpacing(6)
+        # Графики друг под другом разделены горизонтальной "вдавленной" чертой
+        # (корректировка 2026-10-28): без неё легенда верхнего графика
+        # читалась как часть следующего
+        block.addWidget(_horizontal_divider())
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.addWidget(self._title(PERIODS_TITLE))
+        self.periods_help = HelpBadge()
+        self.periods_help.set_help(PERIODS_TITLE, HELP_PERIODS, width=440)
+        title_row.addWidget(self.periods_help)
+        if self._open_guide is not None:
+            guide_link = QLabel("<a href='guide'>Подробнее в путеводителе</a>")
+            guide_link.setObjectName("chartNote")
+            guide_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            guide_link.linkActivated.connect(lambda _href: self._open_guide(GUIDE_SECTION))
+            title_row.addWidget(guide_link)
+        title_row.addStretch(1)
+        methods_frame, self._methods_group = mode_switch(_METHOD_MODE_LABELS, self)
+        self._methods_group.idToggled.connect(self._on_methods_toggled)
+        title_row.addWidget(methods_frame)
+        block.addLayout(title_row)
+        legend = QLabel(_METHODS_LEGEND)
+        legend.setObjectName("chartNote")
+        legend.setWordWrap(True)
+        block.addWidget(legend)
+
+        self.warm_cold_chart = WarmColdChart()
+        self.nested_chart = NestedPeriodsChart()
+        self.series_chart = PeriodSeriesChart()
+        for chart in (self.warm_cold_chart, self.nested_chart, self.series_chart):
+            chart.canvas.setMinimumHeight(320)
+        block.addLayout(self._chart_block(
+            self._title("Тёплый и холодный периоды"), QLabel(_WARM_COLD_NOTE), self.warm_cold_chart
+        ))
+        block.addWidget(_horizontal_divider())
+        block.addLayout(self._chart_block(
+            self._title("Тёплый период и периоды вегетации"), QLabel(_NESTED_NOTE), self.nested_chart
+        ))
+        block.addWidget(_horizontal_divider())
+
+        series_title = QHBoxLayout()
+        series_title.setSpacing(12)
+        self._series_title = self._title()
+        series_title.addWidget(self._series_title)
+        series_title.addStretch(1)
+        kinds_frame, self._kinds_group = mode_switch(_SERIES_LABELS, self)
+        self._kinds_group.idToggled.connect(self._on_kind_toggled)
+        series_title.addWidget(kinds_frame)
+        self._series_note = QLabel(_SERIES_NOTE)
+        block.addLayout(self._chart_block(series_title, self._series_note, self.series_chart))
+        self._update_series_title()
+        return block
+
+    def _on_methods_toggled(self, mode_id: int, checked: bool) -> None:
+        if checked:
+            for chart in (self.warm_cold_chart, self.nested_chart, self.series_chart):
+                chart.set_methods(METHOD_MODES[mode_id])
+
+    def _on_kind_toggled(self, kind_id: int, checked: bool) -> None:
+        if checked:
+            self.series_chart.set_kind(SERIES_KINDS[kind_id])
+            self._update_series_title()
+
+    def _update_series_title(self) -> None:
+        kind = self.series_chart.kind
+        by = "по зимам" if kind == COLD else "по годам"
+        self._series_title.setText(f"Сумма осадков за {KIND_NAMES[kind]} {by}")
+
     # --- показ ---
 
     def set_loading(self, loading: bool) -> None:
@@ -574,6 +738,11 @@ class PrecipitationTab(QWidget):
         self.year_combo.setCurrentIndex(self.year_combo.findData(default))
         self.year_combo.blockSignals(False)
         self.course_chart.plot(data, default)
+        short = data.periods is not None and data.periods.short_period
+        self._series_note.setText(_SERIES_SHORT_NOTE if short else _SERIES_NOTE)
+        methods = METHOD_MODES[self._methods_group.checkedId()]
+        for chart in (self.warm_cold_chart, self.nested_chart, self.series_chart):
+            chart.plot(data.periods, methods)
 
     def clear_results(self, message: str) -> None:
         """Убрать результаты прошлой выборки и показать причину, почему пусто."""

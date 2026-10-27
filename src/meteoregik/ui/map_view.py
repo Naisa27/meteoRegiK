@@ -242,10 +242,13 @@ class MapDialog(QDialog):
         parent: QWidget | None = None,
         run_async: bool = True,
         canvas: QWidget | None = None,
+        open_guide: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(parent)
         enable_min_max_buttons(self)
         self.engine = engine
+        # Передаётся дальше в дашборд ("Открыть в дашборде") — для его ссылок в путеводитель
+        self._open_guide = open_guide
         # run_async=False — загрузка в том же потоке (тесты).
         self._run_async = run_async
         self._data: MapData | None = None
@@ -596,7 +599,9 @@ class MapDialog(QDialog):
 
     def _open_dashboard(self, wmo_index: int) -> None:
         self.play_btn.setChecked(False)
-        exec_window_modal(DashboardDialog(self.engine, self, wmo_index=wmo_index, tab=self.dashboard_tab))
+        exec_window_modal(DashboardDialog(
+            self.engine, self, wmo_index=wmo_index, tab=self.dashboard_tab, open_guide=self._open_guide
+        ))
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)

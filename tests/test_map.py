@@ -665,7 +665,7 @@ def test_station_card_opens_dashboard_for_that_station(engine, monkeypatch):
     opened = []
     monkeypatch.setattr(
         "meteoregik.ui.map_view.DashboardDialog",
-        lambda engine, parent, wmo_index, tab: opened.append((wmo_index, tab))
+        lambda engine, parent, wmo_index, tab, open_guide=None: opened.append((wmo_index, tab))
         or type("D", (), {"exec": lambda self: 0})(),
     )
 

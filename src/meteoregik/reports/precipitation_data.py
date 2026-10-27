@@ -46,7 +46,7 @@ rp5 сухие дни часто не записаны вовсе, в таком
 from __future__ import annotations
 
 from calendar import monthrange
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from statistics import fmean
 
@@ -78,6 +78,7 @@ from meteoregik.reports.dashboard_data import (
     is_short_period,
     linear_trend,
 )
+from meteoregik.reports.transition_precipitation import TransitionPrecipitation, build_transition_precipitation
 
 # Сутки с суммой не меньше этой — "день с осадками" (порог ВМО)
 WET_DAY_MM = 1.0
@@ -234,6 +235,9 @@ class PrecipitationData:
     month_norms: dict[int, float] = field(default_factory=dict)
     annual_norm: NormInfo | None = None
     norm_standard: bool = True
+    # Суммы за периоды между датами перехода температуры; None — не считались
+    # (compute_precipitation без базы, тесты)
+    periods: TransitionPrecipitation | None = None
 
     @property
     def has_data(self) -> bool:
@@ -266,14 +270,17 @@ def station_day_bounds(engine: Engine, wmo_index: int) -> tuple[date, date] | No
 
 def build_precipitation(engine: Engine, wmo_index: int, date_from: date, date_to: date) -> PrecipitationData:
     """Нормы и полнота — сохранённые; если данные станции менялись после
-    последнего расчёта, сначала досчитываются (как build_dashboard)."""
+    последнего расчёта, сначала досчитываются (как build_dashboard). Так же
+    и даты переходов температуры — для сумм за периоды между ними."""
     ensure_fresh(engine, [wmo_index])
     values = fetch_station_values(engine, wmo_index, PRECIPITATION)
     with engine.connect() as conn:
         missed_terms = precipitation.days_with_missed_term(conn, wmo_index)
-    return compute_precipitation(
+    data = compute_precipitation(
         values, date_from, date_to, load_station_norms(engine, wmo_index, PRECIPITATION.parameter), missed_terms
     )
+    periods = build_transition_precipitation(engine, wmo_index, values.days, date_from, date_to)
+    return replace(data, periods=periods)
 
 
 # --- расчёт ---

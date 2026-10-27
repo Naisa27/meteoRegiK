@@ -114,30 +114,44 @@ class HelpBadge(QToolButton):
 
 
 class GrooveDivider(QWidget):
-    """Вертикальная "вдавленная" черта между теплокартой и графиком: тёмная
-    линия-тень и светлая линия-блик рядом (классический engraved-эффект),
-    к концам плавно растворяется в фоне — не режет экран жёсткой чертой."""
+    """"Вдавленная" черта-разделитель: тёмная линия-тень и светлая
+    линия-блик рядом (классический engraved-эффект), к концам плавно
+    растворяется в фоне — не режет экран жёсткой чертой. По умолчанию
+    вертикальная (между теплокартой и графиком); горизонтальная — между
+    графиками друг под другом (корректировка 2026-10-28: легенда верхнего
+    графика сливалась с заголовком нижнего)."""
 
     _SHADOW = QColor(theme.HEADER_BORDER).darker(135)
     _LIGHT = QColor("#FFFFFF")
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, orientation: Qt.Orientation = Qt.Orientation.Vertical) -> None:
         super().__init__(parent)
-        self.setFixedWidth(12)
+        self._vertical = orientation == Qt.Orientation.Vertical
+        if self._vertical:
+            self.setFixedWidth(12)
+        else:
+            self.setFixedHeight(18)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
     def paintEvent(self, event) -> None:  # noqa: N802 — имя метода Qt
         painter = QPainter(self)
-        x = self.width() // 2 - 1
+        length = self.height() if self._vertical else self.width()
+        middle = (self.width() if self._vertical else self.height()) // 2 - 1
         for offset, color in ((0, self._SHADOW), (1, self._LIGHT)):
-            gradient = QLinearGradient(0, 0, 0, self.height())
+            if self._vertical:
+                gradient = QLinearGradient(0, 0, 0, length)
+            else:
+                gradient = QLinearGradient(0, 0, length, 0)
             transparent = QColor(color)
             transparent.setAlpha(0)
             gradient.setColorAt(0.0, transparent)
             gradient.setColorAt(0.12, color)
             gradient.setColorAt(0.88, color)
             gradient.setColorAt(1.0, transparent)
-            painter.fillRect(x + offset, 0, 1, self.height(), gradient)
+            if self._vertical:
+                painter.fillRect(middle + offset, 0, 1, length, gradient)
+            else:
+                painter.fillRect(0, middle + offset, length, 1, gradient)
         painter.end()
 
 

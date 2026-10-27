@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         exec_window_modal(dialog)
 
     def _open_dashboard(self) -> None:
-        dialog = DashboardDialog(self.engine, self)
+        dialog = DashboardDialog(self.engine, self, open_guide=self._open_guide)
         exec_window_modal(dialog)
 
     def _open_anomaly_calc(self) -> None:
@@ -143,7 +143,7 @@ class MainWindow(QMainWindow):
         # движок Qt (QtWebEngine), и запуск приложения не должен его ждать
         from meteoregik.ui.map_view import MapDialog
 
-        dialog = MapDialog(self.engine, self)
+        dialog = MapDialog(self.engine, self, open_guide=self._open_guide)
         exec_window_modal(dialog)
 
     def _open_station_directory(self) -> None:
