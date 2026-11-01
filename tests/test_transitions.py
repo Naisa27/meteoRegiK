@@ -168,16 +168,32 @@ def test_only_months_up_to_the_one_after_the_date_must_be_complete():
         spring = tr.season_transitions(2020, tr.SPRING, days, method)
         autumn = tr.season_transitions(2020, tr.AUTUMN, days, method)
         assert {t: spring[t].status for t in tr.THRESHOLDS} == {
-            0: tr.STATUS_DATE, 5: tr.STATUS_DATE, 10: tr.STATUS_DATE, 15: tr.STATUS_NO_DATA,
+            0: tr.STATUS_DATE, 5: tr.STATUS_DATE, 10: tr.STATUS_DATE, 15: tr.STATUS_PROVISIONAL,
         }
-        assert {t.status for t in autumn.values()} == {tr.STATUS_NO_DATA}
+        assert {t.status for t in autumn.values()} == {tr.STATUS_PROVISIONAL}
 
 
-def test_incomplete_month_before_the_date_means_no_data():
+def test_incomplete_month_before_the_date_preserves_provisional_dates():
     gap = frozenset(date(2020, 1, day) for day in range(1, 11))
     days = _annual_cycle(date(2020, 1, 1), date(2020, 12, 31), skip=gap)
 
-    assert {t.status for t in tr.season_transitions(2020, tr.SPRING, days).values()} == {tr.STATUS_NO_DATA}
+    assert {t.status for t in tr.season_transitions(2020, tr.SPRING, days).values()} == {tr.STATUS_PROVISIONAL}
+
+
+def test_missing_may_preserves_candidates_for_both_methods():
+    days = _annual_cycle(date(1965, 1, 1), date(1965, 7, 31))
+    days = {d: value for d, value in days.items() if d.month != 5}
+    for method in tr.METHODS:
+        actual = tr.season_transitions(1965, tr.SPRING, days, method)
+        for threshold, transition in actual.items():
+            assert transition.status == tr.STATUS_PROVISIONAL
+            assert transition.day == tr.find_transition(sorted(days.items()), threshold, tr.SPRING, method)
+
+
+def test_empty_spring_and_archive_starting_in_july_have_no_transition_date():
+    for days in ({}, {date(1959, 7, d): 20.0 for d in range(1, 32)}):
+        assert all(t.status == tr.STATUS_NO_DATA and t.day is None
+                   for t in tr.season_transitions(1959, tr.SPRING, days).values())
 
 
 def test_no_transition_needs_the_whole_window():

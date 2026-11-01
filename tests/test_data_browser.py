@@ -1,5 +1,7 @@
 from datetime import date, time
+from pathlib import Path
 
+import pytest
 from PySide6.QtWidgets import QApplication
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -225,3 +227,44 @@ def test_editing_precipitation_cell_recomputes_the_daily_sum(tmp_path):
             )
         ).scalar_one()
     assert day_sum == 7.5
+
+
+@pytest.mark.parametrize("action", ["edit", "move", "time", "insert", "delete"])
+def test_raw_change_keeps_pending_marker_if_recompute_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str,
+) -> None:
+    """Commit наблюдения не должен пережить сбой без устойчивой пометки."""
+    from meteoregik.db.schema import pending_recomputations
+
+    _qapp()
+    engine = _make_engine(tmp_path)
+    _insert_rp5_rows(engine, [{"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 1),
+                               "obs_time": time(9), "T_temperature": 1.0}])
+    model = ReadingsTableModel(engine, rp5_readings, RP5_COLUMNS, {"T_temperature"})
+    model.reload()
+
+    def fail_recompute(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("Проверочный сбой после записи наблюдений")
+
+    monkeypatch.setattr("meteoregik.ui.data_browser.recompute_range", fail_recompute)
+    with pytest.raises(RuntimeError, match="Проверочный сбой"):
+        if action == "insert":
+            model.insert_row({"wmo_index": WMO_INDEX, "obs_date": date(2020, 1, 2),
+                              "obs_time": time(9), "T_temperature": 2.0})
+        elif action == "delete":
+            model.delete_row(0)
+        else:
+            column, value = {"edit": ("T_temperature", "9"),
+                             "move": ("obs_date", "2020-01-02"),
+                             "time": ("obs_time", "12:00")}[action]
+            index = next(i for i, field in enumerate(RP5_COLUMNS) if field[0] == column)
+            model.setData(model.index(0, index), value)
+    with engine.connect() as conn:
+        pending_dates = set(conn.scalars(select(pending_recomputations.c.obs_date).where(
+            pending_recomputations.c.wmo_index == WMO_INDEX)))
+        raw_dates = list(conn.scalars(select(rp5_readings.c.obs_date)))
+    expected = {date(2020, 1, 2)} if action == "insert" else {date(2020, 1, 1)}
+    if action == "move":
+        expected.add(date(2020, 1, 2))
+    assert pending_dates == expected
+    assert (len(raw_dates) == 0) if action == "delete" else (len(raw_dates) >= 1)

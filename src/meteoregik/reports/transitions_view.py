@@ -24,13 +24,15 @@ from __future__ import annotations
 from calendar import monthrange
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from meteoregik.calculations import transitions as tr
 
 KIND_VALUE = "value"
 KIND_NONE = "none"
 KIND_NO_DATA = "no_data"
+KIND_PROVISIONAL = "provisional"
+PROVISIONAL_LEGEND = "≈ Предварительные значения"
 
 GROUP_SPRING = "Весна"
 GROUP_AUTUMN = "Осень"
@@ -123,14 +125,35 @@ def incomplete_months(year: int, season: str, days: dict[date, float]) -> list[s
 def _no_data_tip(year: int, season: str, days: dict[date, float]) -> str:
     first, last = tr.season_window(year, season)
     text = (
-        f"Недостаточно данных. Дата считается, только если полные все месяцы окна поиска от его "
-        f"начала ({first:%d.%m.%Y}) до месяца после даты перехода; если переход не найден — все месяцы "
-        f"окна, до {last:%d.%m.%Y}. Полный месяц — пропущено не больше 5 дней и не больше 3 подряд."
+        f"Недостаточно данных для определения даты перехода в окне "
+        f"{first:%d.%m.%Y}–{last:%d.%m.%Y}: по имеющимся наблюдениям кандидат не найден. "
+        "Полный месяц — пропущено не больше 5 дней и не больше 3 подряд."
     )
     months = incomplete_months(year, season, days)
     if months:
         text += " Неполные: " + ", ".join(months) + "."
     return text
+
+
+def _provisional_tip(year: int, season: str, days: dict[date, float]) -> str:
+    """Считаем все пропуски окна, включая его начало и конец."""
+    first, last = tr.season_window(year, season)
+    missing = longest = run = 0
+    day = first
+    while day <= last:
+        if day not in days:
+            missing += 1
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+        day += timedelta(days=1)
+    return (
+        "Предполагаемые даты на основе имеющихся данных. "
+        f"За сезон ({first:%d.%m.%Y}–{last:%d.%m.%Y}) пропущено дней: {missing}; "
+        f"максимум подряд: {longest}. "
+        "Эти предварительные даты участвуют в расчётах длительности периодов, осадков и средних."
+    )
 
 
 def _none_tip(threshold: int, season: str) -> str:
@@ -149,15 +172,19 @@ def _combine(parts: list[_Part], extra_tip: str = "") -> TableCell:
     """Ячейка из значений прочтений (в порядке tr.METHODS). Подсказка
     называет значение каждого прочтения и объясняет "нет данных"/"не было"
     (одинаковые объяснения — один раз)."""
-    same_status = len({(p.kind, p.text) for p in parts}) == 1 and parts[0].kind != KIND_VALUE
+    same_status = len({(p.kind, p.text) for p in parts}) == 1 and parts[0].kind in (KIND_NONE, KIND_NO_DATA)
     text = parts[0].text if same_status else SEPARATOR.join(p.text for p in parts)
     kinds = {p.kind for p in parts}
-    if KIND_NO_DATA in kinds:
+    if KIND_PROVISIONAL in kinds:
+        kind = KIND_PROVISIONAL
+    elif KIND_NO_DATA in kinds:
         kind = KIND_NO_DATA
     elif kinds == {KIND_NONE}:
         kind = KIND_NONE
     else:
         kind = KIND_VALUE
+    if KIND_PROVISIONAL in kinds:
+        text = "≈ " + text
     if same_status:
         lines = [f"{METHODS_ORDER}: {parts[0].text}."]
     else:
@@ -178,6 +205,8 @@ def _transition_part(
         return _Part(NO_DATA_TEXT, KIND_NO_DATA, _no_data_tip(year, season, days))
     if transition.day is None:
         return _Part(NONE_TEXT, KIND_NONE, _none_tip(threshold, season))
+    if transition.status == tr.STATUS_PROVISIONAL:
+        return _Part(_date_text(transition.day, year), KIND_PROVISIONAL, _provisional_tip(year, season, days))
     return _Part(_date_text(transition.day, year), KIND_VALUE)
 
 
@@ -246,6 +275,11 @@ def _duration_part(data: tr.StationTransitions, year: int, threshold: int, metho
                    days: dict[date, float]) -> _Part:
     duration = data.duration(year, threshold, method)
     if duration is not None:
+        preliminary = [s for s in tr.SEASONS if (t := data.get(year, s, threshold, method))
+                       is not None and t.status == tr.STATUS_PROVISIONAL]
+        if preliminary:
+            return _Part(str(duration), KIND_PROVISIONAL,
+                         "\n\n".join(_provisional_tip(year, s, days) for s in preliminary))
         return _Part(str(duration), KIND_VALUE)
     pair = [(s, data.get(year, s, threshold, method)) for s in tr.SEASONS]
     missing = [s for s, t in pair if t is None or t.status == tr.STATUS_NO_DATA]

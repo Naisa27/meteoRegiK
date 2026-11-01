@@ -158,6 +158,20 @@ computed_indicators = Table(
     ),
 )
 
+# Пометка хранится вместе с сырьём, чтобы сбой между загрузкой и расчётом
+# не оставлял незаметный недосчёт. Ревизия защищает более позднюю правку от
+# очистки уже запущенным пересчётом. periods_only сохраняет дневной выбор.
+pending_recomputations = Table(
+    "pending_recomputations",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("obs_date", Date, primary_key=True),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    Column("auto_accept", Boolean, nullable=False, server_default="0"),
+    Column("periods_only", Boolean, nullable=False, server_default="0"),
+    Column("missing_only", Boolean, nullable=False, server_default="0"),
+)
+
 # --- сохранённый расчёт отклонений от нормы (миграция 6, calculations/anomalies.py) ---
 
 # Нормы станции. period_type: 'month' (month = 1–12), 'decade' (month и

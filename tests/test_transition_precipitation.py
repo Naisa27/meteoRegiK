@@ -22,6 +22,7 @@ from meteoregik.calculations.transitions import (
     STATUS_DATE,
     STATUS_NO_DATA,
     STATUS_NONE,
+    STATUS_PROVISIONAL,
     StationTransitions,
     Transition,
 )
@@ -29,6 +30,7 @@ from meteoregik.db.migrations import run_migrations
 from meteoregik.db.schema import computed_indicators, stations
 from meteoregik.db.session import get_engine
 from meteoregik.reports.transition_precipitation import (
+    ACTIVE,
     COLD,
     SUMMER,
     VEGETATION,
@@ -93,6 +95,29 @@ def _find(periods, kind, method, year):
 
 
 # --- периоды и суммы ---
+
+
+@pytest.mark.parametrize("method", (METHOD_HMC, METHOD_KR))
+@pytest.mark.parametrize("kind, threshold", ((WARM, 0), (COLD, 0), (VEGETATION, 5), (ACTIVE, 10), (SUMMER, 15)))
+def test_provisional_dates_define_period_sums_and_means(kind: str, threshold: int, method: str) -> None:
+    """Предварительные границы участвуют и в холодном периоде двух лет,
+    и во всех вложенных периодах; полнота осадков проверяется отдельно."""
+    if kind == COLD:
+        start, end = date(2014, 11, 10), date(2015, 3, 20)
+        keys = ((2014, AUTUMN, threshold, method), (2015, SPRING, threshold, method))
+    else:
+        start, end = date(2014, 4, 19), date(2014, 10, 1)
+        keys = ((2014, SPRING, threshold, method), (2014, AUTUMN, threshold, method))
+    data = _transitions({key: Transition(STATUS_PROVISIONAL, day) for key, day in zip(keys, (start, end))})
+    result = compute_transition_precipitation(data, _daily(start, end, 2.0), start, end)
+
+    period = _find(result.periods, kind, method, 2014)
+    assert (period.start, period.end) == (start, end - timedelta(days=1))
+    assert period.days == (end - start).days
+    assert period.value == period.days * 2.0
+    assert period.complete
+    assert result.means[(kind, method)].value == period.value
+    assert not [gap for gap in result.gaps if (gap.kind, gap.method, gap.year) == (kind, method, 2014)]
 
 
 def test_warm_period_runs_from_spring_date_to_the_day_before_autumn_date(two_years):

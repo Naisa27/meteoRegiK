@@ -99,6 +99,7 @@ from meteoregik.db.schema import (
     gg_readings,
     metadata,
     norm_bases,
+    pending_recomputations,
     period_completeness,
     rp5_readings,
     schema_version,
@@ -108,7 +109,7 @@ from meteoregik.db.schema import (
     transition_state,
 )
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
@@ -197,6 +198,8 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_9(conn)
             if version < 10:
                 _migrate_to_10(conn)
+            if version < 11:
+                _migrate_to_11(conn)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -258,6 +261,11 @@ def _migrate_to_10(conn: Connection) -> None:
     temperature_transitions.drop(conn, checkfirst=True)
     temperature_transitions.create(conn)
     conn.execute(transition_seasons.delete())
+
+
+def _migrate_to_11(conn: Connection) -> None:
+    """Очередь не меняет наблюдения и не запускает пересчёт при обновлении."""
+    pending_recomputations.create(conn, checkfirst=True)
 
 
 def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:

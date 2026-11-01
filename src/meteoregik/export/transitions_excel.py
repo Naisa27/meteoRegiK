@@ -7,7 +7,8 @@
 Значения пишутся текстом, как на экране: в ячейке два прочтения метода
 через слэш (Гидрометцентр / "Климат России", корректировка 2026-10-27) —
 датой Excel такую ячейку не записать. Порядок прочтений — в строке под
-названием станции. "Нет данных" — со штриховкой, как на экране; подсказка
+названием станции. Предварительные значения — на янтарном фоне со знаком ≈,
+"нет данных" — со штриховкой, как на экране; подсказка
 ячейки — в её примечании."""
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from meteoregik.calculations import transitions as tr
 from meteoregik.reports import table_palette
-from meteoregik.reports.transitions_view import KIND_NO_DATA, KIND_VALUE, METHODS_ORDER, YEAR_TITLE, Table
+from meteoregik.reports.transitions_view import KIND_NO_DATA, KIND_PROVISIONAL, KIND_VALUE, METHODS_ORDER, YEAR_TITLE, Table
 
 SHEET_TRANSITIONS = "Таблица переходов"
 SHEET_PERIODS = "Таблица периодов"
@@ -56,7 +57,7 @@ def _write_table(ws: Worksheet, table: Table, station_title: str) -> None:
     ws.cell(row=1, column=1, value=station_title).font = Font(bold=True, size=12)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=width)
     ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
-    ws.cell(row=2, column=1, value=f"В ячейках: {METHODS_ORDER}").font = Font(italic=True)
+    ws.cell(row=2, column=1, value=f"В ячейках: {METHODS_ORDER}. ≈ Предварительные значения").font = Font(italic=True)
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=width)
     ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
 
@@ -97,6 +98,9 @@ def _write_table(ws: Worksheet, table: Table, station_title: str) -> None:
             cell = ws.cell(row=excel_row, column=index + 2, value=data.text)
             if data.kind == KIND_NO_DATA:
                 cell.fill = PatternFill("lightUp", fgColor=HATCH_COLOR.lstrip("#"))
+            elif data.kind == KIND_PROVISIONAL:
+                cell.fill = _fill(table_palette.PROVISIONAL_FILL)
+                cell.font = Font(color=table_palette.TEXT.lstrip("#"), bold=row.mean)
             if row.mean:
                 cell.font = Font(bold=True)
             if data.tip and (data.kind != KIND_VALUE or row.mean):

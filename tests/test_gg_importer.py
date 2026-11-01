@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -193,3 +197,102 @@ def test_file_of_only_empty_rows_imports_nothing_and_does_not_check_station(tmp_
     with engine.connect() as conn:
         assert conn.execute(select(gg_readings)).first() is None
         assert conn.execute(select(stations).where(stations.c.wmo_index == 55555)).first() is None
+
+
+def test_multistation_report_has_individual_file_and_new_periods(tmp_path: Path) -> None:
+    """Пересчёт получает каждую станцию и только её новые дни."""
+    engine = _engine_with_station(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(stations.insert().values(name="Калуга", wmo_index=27705))
+    importer = GgImporter(engine)
+    importer.import_file(_write_gg_xlsx(
+        tmp_path / "old.xlsx", rows=[[27707, 2020, 1, 1, 1, 2, 0, -1]],
+    ))
+    file_path = _write_gg_xlsx(
+        tmp_path / "multi.xlsx", rows=[
+            [27707, 2020, 1, 1, 99, 100, 20, 50],
+            [27707, 2020, 1, 3, 3, 4, None, None],
+            [27705, 2020, 2, 10, 5, 6, 0, 1],
+            [27705, 2020, 2, 11, 7, 8, None, 2],
+        ],
+    )
+    report = importer.import_file(file_path)
+    assert report.wmo_index is None and report.station_name is None
+    by_station = {station.wmo_index: station for station in report.stations}
+    assert set(by_station) == {27705, 27707}
+    sukh = by_station[27707]
+    assert sukh.station_name == "Сухиничи"
+    assert (str(sukh.period_start), str(sukh.period_end)) == ("2020-01-01", "2020-01-03")
+    assert (str(sukh.new_period_start), str(sukh.new_period_end)) == ("2020-01-03", "2020-01-03")
+    assert (sukh.imported_rows, sukh.skipped_rows) == (1, 1)
+    kaluga = by_station[27705]
+    assert (str(kaluga.period_start), str(kaluga.period_end)) == ("2020-02-10", "2020-02-11")
+    assert kaluga.new_period_start == kaluga.period_start
+    assert kaluga.new_period_end == kaluga.period_end
+    assert (report.total_rows, report.imported_rows, report.skipped_rows) == (4, 3, 1)
+    again = importer.import_file(file_path)
+    assert (again.imported_rows, again.skipped_rows) == (0, 4)
+    assert {station.wmo_index for station in again.stations} == {27705, 27707}
+    assert all(station.new_period_start is None and station.new_period_end is None for station in again.stations)
+
+
+def test_identical_rows_inside_gg_file_are_skipped_with_balanced_report(tmp_path: Path) -> None:
+    engine = _engine_with_station(tmp_path)
+    path = _write_gg_xlsx(tmp_path / "duplicate.xlsx", rows=[
+        [27707, 2020, 1, 1, 1, None, 0, None],
+        [27707, 2020, 1, 1, 1, None, 0, None],
+        [27707, 2020, 1, 2, None, None, None, None],
+    ])
+    importer = GgImporter(engine)
+    report = importer.import_file(path)
+    assert (report.imported_rows, report.skipped_rows, report.duplicates_in_file) == (1, 1, 1)
+    assert report.total_rows == report.imported_rows + report.skipped_rows + report.rows_without_data
+    assert report.stations[0].duplicates_in_file == 1
+    again = importer.import_file(path)
+    assert (again.imported_rows, again.skipped_rows, again.duplicates_in_file) == (0, 2, 0)
+    assert again.stations[0].new_period_start is None
+    assert again.stations[0].new_period_end is None
+    assert str(again.stations[0].period_start) == "2020-01-01"
+    with engine.connect() as conn:
+        assert len(conn.execute(select(gg_readings)).all()) == 1
+
+
+@pytest.mark.parametrize("column", [4, 5, 6, 7])
+def test_conflicting_new_gg_keys_reject_entire_file_with_excel_rows(tmp_path: Path, column: int) -> None:
+    from meteoregik.importers.base import DuplicateKeyConflictError
+
+    engine = _engine_with_station(tmp_path)
+    duplicate = [27707, 2020, 1, 1, 1, 2, 0, None]
+    changed = duplicate.copy()
+    changed[column] = 8
+    path = _write_gg_xlsx(tmp_path / "conflict.xlsx", rows=[
+        duplicate,
+        [27707, 2020, 1, 2, None, None, None, None],
+        [27707, 2020, 1, 3, 3, 4, 1, 0],
+        changed,
+    ])
+    with pytest.raises(DuplicateKeyConflictError) as raised:
+        GgImporter(engine).import_file(path)
+    message = str(raised.value)
+    assert "27707" in message and "2020-01-01" in message
+    assert (raised.value.first_row, raised.value.second_row) == (2, 5)
+    assert "строк" in message.lower()
+    with engine.connect() as conn:
+        assert conn.execute(select(gg_readings)).first() is None
+
+
+def test_existing_gg_key_ignores_conflicting_file_rows(tmp_path: Path) -> None:
+    engine = _engine_with_station(tmp_path)
+    importer = GgImporter(engine)
+    importer.import_file(_write_gg_xlsx(tmp_path / "old.xlsx", rows=[
+        [27707, 2020, 1, 1, 1, 2, 0, None],
+    ]))
+    report = importer.import_file(_write_gg_xlsx(tmp_path / "new.xlsx", rows=[
+        [27707, 2020, 1, 1, 10, 20, 30, 40],
+        [27707, 2020, 1, 1, 50, 60, 70, 80],
+        [27707, 2020, 1, 2, 2, 3, None, None],
+    ]))
+    assert (report.imported_rows, report.skipped_rows, report.duplicates_in_file) == (1, 2, 0)
+    with engine.connect() as conn:
+        old = conn.execute(select(gg_readings).where(gg_readings.c.obs_date == report.period_start)).mappings().one()
+    assert old["t_avg"] == 1

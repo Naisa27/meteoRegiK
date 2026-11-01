@@ -36,7 +36,10 @@
 локальное допущение: строго по методу похолодание в пропущенные дни после
 даты могло бы её отменить, но пропуски через месяцы после перехода этого
 практически не могут; иначе неполный июль отменял апрельские переходы).
-Неполный месяц в этой части окна — 'no_data'. Если перехода не нашлось
+Неполный месяц в этой части окна — предварительная дата ('provisional'),
+которая участвует во всех дальнейших расчётах. Без найденного кандидата
+при неполном окне остаётся 'no_data': дату восстановить невозможно.
+Если перехода не нашлось
 ("не было"), полными должны быть все месяцы окна. Порог и прочтение
 проверяются каждый отдельно. Дни без данных внутри полного месяца просто
 пропускаются: периоды по обе стороны пропуска не рвутся.
@@ -74,6 +77,7 @@ AUTUMN = "autumn"
 SEASONS: tuple[str, ...] = (SPRING, AUTUMN)
 
 STATUS_DATE = "date"
+STATUS_PROVISIONAL = "provisional"
 STATUS_NONE = "none"
 STATUS_NO_DATA = "no_data"
 
@@ -84,7 +88,7 @@ METHOD_NAMES = {METHOD_HMC: "Гидрометцентр", METHOD_KR: "«Клим
 
 # Меняется при изменении правил: сезоны, посчитанные по старым, считаются
 # требующими расчёта. 2 — два прочтения и полнота до месяца после даты.
-RULE_VERSION = 2
+RULE_VERSION = 3
 
 SeasonKey = tuple[int, str]  # (год, сезон)
 
@@ -216,7 +220,9 @@ def season_transitions(
     for threshold in THRESHOLDS:
         day = find_transition(values, threshold, season, method)
         if incomplete.intersection(required_months(year, season, day)):
-            result[threshold] = Transition(STATUS_NO_DATA)
+            # Пропуски снижают достоверность, но не отменяют найденную дату.
+            # Без кандидата дату не придумываем (например, архив начат летом).
+            result[threshold] = Transition(STATUS_PROVISIONAL, day) if day else Transition(STATUS_NO_DATA)
         else:
             result[threshold] = Transition(STATUS_DATE, day) if day else Transition(STATUS_NONE)
     return result
@@ -567,7 +573,7 @@ def station_states(engine: Engine) -> list[StationState]:
         dated = dict(
             conn.execute(
                 select(temperature_transitions.c.wmo_index, func.count(temperature_transitions.c.year.distinct()))
-                .where(temperature_transitions.c.status == STATUS_DATE)
+                .where(temperature_transitions.c.status.in_((STATUS_DATE, STATUS_PROVISIONAL)))
                 .group_by(temperature_transitions.c.wmo_index)
             ).all()
         )

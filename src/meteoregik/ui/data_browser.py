@@ -60,6 +60,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from meteoregik.calculations.recompute import recompute_range
+from meteoregik.calculations.pending import mark_pending
 from meteoregik.db.schema import RP5_PARAMETER_COLUMNS, gg_readings, rp5_readings
 from meteoregik.importers.rp5_importer import RP5_COLUMN_MAP
 from meteoregik.preferences import Preferences
@@ -390,13 +391,18 @@ class ReadingsTableModel(QAbstractTableModel):
                     .where(self.table.c.id == row["id"])
                     .values(**{col_name: parsed, "updated_at": func.current_timestamp()})
                 )
+                if col_name in self.temp_columns or col_name in {"obs_date", "obs_time"}:
+                    dates = {old_date}
+                    if col_name == "obs_date":
+                        dates.add(parsed)
+                    mark_pending(conn, row["wmo_index"], [day for day in dates if day is not None])
         except IntegrityError:
             return False
 
         row[col_name] = parsed
         self.dataChanged.emit(index, index)
 
-        if col_name in self.temp_columns:
+        if col_name in self.temp_columns or col_name == "obs_time":
             recompute_range(self.engine, row["wmo_index"], row["obs_date"], row["obs_date"])
         elif col_name == "obs_date" and old_date is not None and old_date != row["obs_date"]:
             recompute_range(self.engine, row["wmo_index"], old_date, old_date)
@@ -409,6 +415,8 @@ class ReadingsTableModel(QAbstractTableModel):
     def insert_row(self, values: dict) -> None:
         with self.engine.begin() as conn:
             conn.execute(self.table.insert().values(**values))
+            mark_pending(conn, values["wmo_index"], [values["obs_date"]])
+        recompute_range(self.engine, values["wmo_index"], values["obs_date"], values["obs_date"])
         if self.loaded:
             self.reload()
 
@@ -416,6 +424,7 @@ class ReadingsTableModel(QAbstractTableModel):
         row = self.rows[row_index]
         with self.engine.begin() as conn:
             conn.execute(delete(self.table).where(self.table.c.id == row["id"]))
+            mark_pending(conn, row["wmo_index"], [row["obs_date"]])
         recompute_range(self.engine, row["wmo_index"], row["obs_date"], row["obs_date"])
         self.reload()
 

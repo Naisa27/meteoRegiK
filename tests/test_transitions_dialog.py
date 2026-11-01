@@ -29,8 +29,8 @@ def qapp():
 @pytest.fixture
 def engine(tmp_path):
     """2019–2021 годы гладкого годового хода, в июле 2021 — 6 пропусков:
-    весной 2021 "нет данных" только у 15 °C (июнь, за ним июль), осенью 2021
-    — у всех порогов (июль — начало окна)."""
+    весной 2021 предварительная дата только у 15 °C (июнь, за ним июль),
+    осенью 2021 — у всех порогов (июль — начало окна)."""
     engine = get_engine(tmp_path / "test.sqlite3")
     run_migrations(engine)
     gap = frozenset(date(2021, 7, day) for day in (1, 5, 9, 13, 17, 21))
@@ -48,6 +48,30 @@ def _texts(table: view.Table) -> list[list[str]]:
     return [[row.label, *(cell.text for cell in row.cells)] for row in table.rows]
 
 
+def test_provisional_date_and_duration_have_hatch_kind_and_gap_tooltip():
+    from datetime import timedelta
+    days = {date(1965, 1, 1) + timedelta(days=n): 1.0 for n in range(212)}
+    missing = {date(1965, 5, d) for d in range(1, 32)} | {
+        date(1965, 2, 1), date(1965, 6, 26), date(1965, 7, 2), date(1965, 7, 6)}
+    days = {d: v for d, v in days.items() if d not in missing}
+    data = tr.StationTransitions([1965], {
+        (1965, season, 0, method): tr.Transition(status, day)
+        for method in tr.METHODS
+        for season, status, day in (
+            (tr.SPRING, tr.STATUS_PROVISIONAL, date(1965, 4, 13)),
+            (tr.AUTUMN, tr.STATUS_DATE, date(1965, 11, 1)),
+        )
+    })
+    cell = view.transitions_table(data, days).rows[0].cells[0]
+    assert cell.text == "≈ 13.04 / 13.04"
+    assert cell.kind == view.KIND_PROVISIONAL
+    assert "пропущено дней: 35" in cell.tip and "максимум подряд: 31" in cell.tip
+    period = view.periods_table(data, days).rows[0].cells[0]
+    assert period.kind == view.KIND_PROVISIONAL
+    assert period.text == "≈ 202 / 202"
+    assert tr.mean_date(data, tr.SPRING, 0).years == 1
+
+
 # --- раскладка ---
 
 
@@ -61,10 +85,10 @@ def test_transitions_table_layout(engine):
     assert [c.group for c in table.columns] == [view.GROUP_SPRING] * 4 + [view.GROUP_AUTUMN] * 4
     assert [row.label for row in table.rows] == ["2019", "2020", "2021", view.MEAN_DATE_LABEL]
     row_2021 = table.rows[2]
-    assert [cell.kind for cell in row_2021.cells] == [view.KIND_VALUE] * 3 + [view.KIND_NO_DATA] * 5
-    # У обоих прочтений "нет данных" — слово один раз
-    assert row_2021.cells[3].text == view.NO_DATA_TEXT
-    assert "июль 2021 (25 дн. из 31)" in row_2021.cells[3].tip
+    assert [cell.kind for cell in row_2021.cells] == [view.KIND_VALUE] * 3 + [view.KIND_PROVISIONAL] * 5
+    assert row_2021.cells[3].text != view.NO_DATA_TEXT
+    assert "пропущено дней: 6" in row_2021.cells[3].tip
+    assert "максимум подряд: 1" in row_2021.cells[3].tip
     hmc, kr = (data.get(2019, tr.SPRING, 0, method).day for method in tr.METHODS)
     assert table.rows[0].cells[0].text == f"{hmc:%d.%m} / {kr:%d.%m}"
     assert "Гидрометцентр" in table.rows[0].cells[0].tip
@@ -135,7 +159,12 @@ def test_dialog_calculates_on_open_and_shows_station(qapp, engine):
     model = dialog.transitions_model
     assert model.rowCount() == 4 and model.columnCount() == 9
     assert model.headerData(0, Qt.Orientation.Horizontal) == "Год"
-    assert model.is_mean(3) and model.is_no_data(2, 4) and not model.is_no_data(2, 1)
+    assert model.is_mean(3) and not model.is_no_data(2, 4) and not model.is_no_data(2, 1)
+    index = model.index(2, 4)
+    assert index.data(Qt.ItemDataRole.DisplayRole).startswith("≈ ")
+    assert index.data(Qt.ItemDataRole.BackgroundRole).color().name() == "#fff0cc"
+    assert index.data(Qt.ItemDataRole.ForegroundRole).name() == "#26333a"
+    assert "Предварительные значения" in dialog.provisional_legend.text()
     assert "<div" in model.data(model.index(2, 4), Qt.ItemDataRole.ToolTipRole)  # подсказка с переносом
     assert dialog.periods_model.rowCount() == 4
     assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == [TAB_TRANSITIONS, TAB_PERIODS, TAB_STATE]
@@ -146,10 +175,7 @@ def test_state_tab_lists_stations_and_what_was_recalculated(qapp, engine):
 
     [row] = dialog.state_model.rows
     assert row.state.recalculated == "весна и осень 2019, весна и осень 2020, весна и осень 2021"
-    assert [s.year for s in row.state.no_data_seasons[tr.SPRING]] == [2021]
-    assert no_data_html(row.state.no_data_seasons[tr.AUTUMN]) == (
-        "<b>2021</b>: июль (25 дн. из 31), январь – февраль 2022: нет данных"
-    )
+    assert row.state.no_data_seasons == {}
     assert "пересчитаны сезоны 1 из них" in dialog.summary.text()
 
     again = TransitionsDialog(engine, run_async=False)
@@ -203,12 +229,17 @@ def test_export_writes_both_tables(engine, tmp_path):
     assert workbook.sheetnames == [SHEET_TRANSITIONS, SHEET_PERIODS]
     sheet = workbook[SHEET_TRANSITIONS]
     assert sheet["A1"].value == "Станция (27707)"
-    assert sheet["A2"].value == "В ячейках: Гидрометцентр / «Климат России»"
+    assert sheet["A2"].value == "В ячейках: Гидрометцентр / «Климат России». ≈ Предварительные значения"
     assert (sheet["B3"].value, sheet["F3"].value, sheet["B4"].value) == ("Весна", "Осень", "0 °C")
     assert sheet["A5"].value == 2019
     hmc, kr = (data.get(2019, tr.SPRING, 0, method).day for method in tr.METHODS)
     assert sheet["B5"].value == f"{hmc:%d.%m} / {kr:%d.%m}"
-    assert sheet["E7"].value == view.NO_DATA_TEXT and sheet["E7"].comment is not None
+    assert sheet["E7"].value == "≈ " + " / ".join(
+        f"{data.get(2021, tr.SPRING, 15, m).day:%d.%m}" for m in tr.METHODS
+    )
+    assert sheet["E7"].fill.patternType == "solid"
+    assert sheet["E7"].fill.fgColor.rgb == "00FFF0CC"
+    assert "Предполагаемые даты" in sheet["E7"].comment.text
     assert sheet["A8"].value == view.MEAN_DATE_LABEL
     periods = workbook[SHEET_PERIODS]
     assert periods["B5"].value == " / ".join(str(data.duration(2019, 0, m)) for m in tr.METHODS)

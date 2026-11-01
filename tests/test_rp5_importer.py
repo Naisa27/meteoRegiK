@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -283,3 +287,96 @@ def test_yo_and_ye_are_the_same_letter_in_station_name(tmp_path):
     file_path = _write_rp5_xlsx(tmp_path / "rp5.xlsx", wmo=27719, name="Орел", rows=_ROWS)
 
     assert Rp5Importer(engine).import_file(file_path).imported_rows == 1
+
+
+def test_identical_rows_inside_rp5_file_are_skipped_and_reported(tmp_path: Path) -> None:
+    engine = _engine_with_station(tmp_path)
+    row = ["01.01.2020 09:00", 1, "Осадков нет", None, None, 3, None, None]
+    path = _write_rp5_xlsx(tmp_path / "duplicate.xlsx", rows=[row, row.copy()])
+    importer = Rp5Importer(engine)
+    report = importer.import_file(path)
+    assert (report.imported_rows, report.skipped_rows, report.duplicates_in_file) == (1, 1, 1)
+    assert report.total_rows == report.imported_rows + report.skipped_rows
+    station = report.stations[0]
+    assert station.wmo_index == 27704
+    assert station.new_period_start == station.period_start == report.period_start
+    assert station.new_period_end == station.period_end == report.period_end
+    assert station.duplicates_in_file == 1
+    again = importer.import_file(path)
+    assert (again.imported_rows, again.skipped_rows, again.duplicates_in_file) == (0, 2, 1)
+    assert again.stations[0].new_period_start is None
+    assert again.stations[0].new_period_end is None
+    assert _count_rows(engine) == 1
+
+
+@pytest.mark.parametrize("column", list(range(1, len(DEFAULT_COLUMNS))))
+def test_conflicting_new_rp5_keys_reject_all_rows_with_actual_excel_numbers(tmp_path: Path, column: int) -> None:
+    from meteoregik.importers.base import DuplicateKeyConflictError
+
+    engine = _engine_with_station(tmp_path)
+    original = ["01.01.2020 09:00", 1, "Осадков нет", None, None, 3, None, None]
+    changed = original.copy()
+    changed[column] = "Следы осадков" if column == 2 else 8
+    path = _write_rp5_xlsx(tmp_path / "conflict.xlsx", rows=[
+        original,
+        ["02.01.2020 09:00", 2, None, None, None, None, None, None],
+        changed,
+    ])
+    with pytest.raises(DuplicateKeyConflictError) as raised:
+        Rp5Importer(engine).import_file(path)
+    message = str(raised.value)
+    assert "27704" in message and "2020-01-01" in message and "09:00" in message
+    assert (raised.value.first_row, raised.value.second_row) == (5, 7)
+    assert "строк" in message.lower()
+    assert _count_rows(engine) == 0
+
+
+def test_existing_rp5_key_still_requires_unambiguous_day_candidate(tmp_path: Path) -> None:
+    engine = _engine_with_station(tmp_path)
+    importer = Rp5Importer(engine)
+    importer.import_file(_write_rp5_xlsx(tmp_path / "old.xlsx", rows=[
+        ["01.01.2020 09:00", 1, None, None, None, None, None, None],
+    ]))
+    path = _write_rp5_xlsx(tmp_path / "new.xlsx", rows=[
+        ["01.01.2020 09:00", 10, None, None, None, None, None, None],
+        ["01.01.2020 09:00", 20, None, None, None, None, None, None],
+        ["03.01.2020 09:00", 3, None, None, None, None, None, None],
+    ])
+    from meteoregik.importers.base import DuplicateKeyConflictError
+    with pytest.raises(DuplicateKeyConflictError):
+        importer.import_file(path)
+    with engine.connect() as conn:
+        old = conn.execute(select(rp5_readings)).mappings().one()
+    assert old["T_temperature"] == 1
+
+
+def test_rp5_text_measurements_compare_the_values_stored_in_sqlite(tmp_path: Path) -> None:
+    """Число и та же строка в текстовом RRR сохраняются одинаково."""
+    engine = _engine_with_station(tmp_path)
+    file_path = _write_rp5_xlsx(tmp_path / "numbers.xlsx", rows=[
+        ["01.01.2020 09:00", 1, 1, None, None, None, None, None],
+        ["01.01.2020 09:00", 1, "1", None, None, None, None, None],
+        ["02.01.2020 09:00", 2, "Следы осадков", None, None, None, None, None],
+    ])
+    report = Rp5Importer(engine).import_file(file_path)
+    assert (report.imported_rows, report.duplicates_in_file) == (2, 1)
+
+
+def test_rp5_conflict_reports_excel_row_numbers_after_long_header(tmp_path: Path) -> None:
+    from meteoregik.importers.base import DuplicateKeyConflictError
+
+    engine = _engine_with_station(tmp_path)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["# Метеостанция Мосальск, Россия, WMO_ID=27704, выборка"])
+    for index in range(8):
+        sheet.append([f"# Дополнительная строка шапки {index}"])
+    sheet.append(["Местное время в Мосальске", "T"])
+    sheet.append(["01.01.2020 09:00", 1])
+    sheet.append(["01.01.2020 09:00", 2])
+    path = tmp_path / "long_header.xlsx"
+    workbook.save(path)
+    with pytest.raises(DuplicateKeyConflictError) as raised:
+        Rp5Importer(engine).import_file(str(path))
+    assert (raised.value.first_row, raised.value.second_row) == (11, 12)
+    assert _count_rows(engine) == 0

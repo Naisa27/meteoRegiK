@@ -1,14 +1,18 @@
-from datetime import date
+from datetime import date, time
+from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 from sqlalchemy import select
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from meteoregik.calculations.recompute import ValueConflict
+from meteoregik.calculations.recompute import recompute_range
 from meteoregik.db.migrations import run_migrations
 from meteoregik.db.session import get_engine
-from meteoregik.importers.base import ImportReport
-from meteoregik.db.schema import rp5_readings, stations
+from meteoregik.importers.base import ImportReport, StationImportReport
+from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings, stations
+from meteoregik.importers.gg_importer import GgImporter
 from meteoregik.stations.matching import StationNameMismatch
 from meteoregik.ui.import_dialog import (
     ImportDialog,
@@ -354,4 +358,293 @@ def test_import_dialog_fits_full_report_without_clipping():
     assert "Строк без данных (не загружены): 784" in dialog.report_label.text()
     assert dialog.report_label.height() >= dialog.report_label.sizeHint().height()
     assert dialog.report_label.height() >= dialog.report_label.fontMetrics().lineSpacing() * 6
+
+
+def _multi_station_dialog(tmp_path: Path) -> ImportDialog:
+    """Разные даты станций выявляют пересчёт по ошибочному общему периоду."""
+    _qapp()
+    engine = get_engine(tmp_path / "multi.sqlite3")
+    run_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(stations.insert(), [
+            {"wmo_index": 27705, "name": "Калуга"},
+            {"wmo_index": 27707, "name": "Сухиничи"},
+        ])
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"])
+    ws.append([27705, 2020, 1, 1, 1.0, 2.0, 0.0, -1.0])
+    ws.append([27707, 2020, 3, 2, 3.0, 4.0, 1.0, 2.0])
+    path = tmp_path / "multi.xlsx"
+    wb.save(path)
+    dialog = ImportDialog(engine)
+    dialog.file_edit.setText(str(path))
+    dialog.gg_radio.setChecked(True)
+    return dialog
+
+
+def _calculated_stations(dialog: ImportDialog) -> set[int]:
+    with dialog.engine.connect() as conn:
+        return set(conn.scalars(select(computed_indicators.c.wmo_index).distinct()))
+
+
+def test_multi_station_import_recomputes_every_station(tmp_path: Path) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+
+    dialog._run_import()
+
+    assert _calculated_stations(dialog) == {27705, 27707}
+    assert dialog.success_label.text() == "Импорт завершён успешно"
+    assert "Калуга" in dialog.report_label.text() and "Сухиничи" in dialog.report_label.text()
+
+
+def test_multi_station_progress_uses_own_ranges_and_shared_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    calls = []
+    progress = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
+
+    def fake_recompute(engine, wmo, start, end, *, progress_callback, conflict_resolver, periods_only=False):
+        assert not dialog.success_label.text()
+        calls.append((wmo, start, end, conflict_resolver))
+        progress_callback(end)
+        progress.append(dialog.progress_bar.value())
+        assert str(wmo) in dialog.status_label.text()
+
+    monkeypatch.setattr("meteoregik.ui.import_dialog.recompute_range", fake_recompute)
+
+    dialog._run_import()
+
+    assert [call[:3] for call in calls] == [
+        (27705, date(2020, 1, 1), date(2020, 1, 1)),
+        (27707, date(2020, 3, 2), date(2020, 3, 2)),
+    ]
+    assert calls[0][3] is calls[1][3]
+    assert progress == [1, 2]
+    assert dialog.progress_bar.maximum() == 2
+
+
+def test_repeated_import_without_repair_does_not_recompute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    dialog._run_import()
+
+    def unexpected_recompute(*args, **kwargs):
+        pytest.fail("Обычный повторный импорт не должен пересчитывать архив")
+
+    monkeypatch.setattr("meteoregik.ui.import_dialog.recompute_range", unexpected_recompute)
+
+    dialog._run_import()
+
+    assert dialog.success_label.text() == "Импорт завершён успешно"
+
+
+def test_repair_recomputes_previously_imported_stations_without_touching_raw_data(tmp_path: Path) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    GgImporter(dialog.engine).import_file(dialog.file_edit.text())
+    with dialog.engine.connect() as conn:
+        before = conn.execute(select(gg_readings).order_by(gg_readings.c.id)).all()
+    assert not _calculated_stations(dialog)
+
+    dialog._run_import()
+
+    assert _calculated_stations(dialog) == {27705, 27707}
+    with dialog.engine.connect() as conn:
+        assert conn.execute(select(gg_readings).order_by(gg_readings.c.id)).all() == before
+    assert "Импортировано: 0" in dialog.report_label.text()
+    assert dialog.success_label.text() == "Импорт завершён успешно"
+
+
+def test_failed_recompute_does_not_report_success_and_explains_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    messages = []
+
+    def fail_on_second(engine, wmo, *args, **kwargs):
+        if wmo == 27707:
+            raise RuntimeError("Проверочная ошибка пересчёта")
+
+    monkeypatch.setattr("meteoregik.ui.import_dialog.recompute_range", fail_on_second)
+    monkeypatch.setattr(QMessageBox, "critical", lambda parent, title, text: messages.append((title, text)))
+
+    dialog._run_import()
+
+    assert not dialog.success_label.text()
+    assert len(messages) == 1
+    assert messages[0][0] == "Ошибка пересчёта"
+    assert "автоматически" in messages[0][1]
+    assert "Импортировано: 2" in dialog.report_label.text()
+
+
+def test_partial_import_only_recomputes_new_station_ranges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    dialog._run_import()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Индекс ВМО", "Год", "Месяц", "День", "Tavg", "Tmax", "RRR", "Tmin"])
+    ws.append([27705, 2020, 1, 1, 1.0, 2.0, 0.0, -1.0])
+    ws.append([27707, 2020, 3, 2, 3.0, 4.0, 1.0, 2.0])
+    ws.append([27707, 2020, 6, 1, 5.0, 6.0, 2.0, 4.0])
+    path = tmp_path / "partial.xlsx"
+    wb.save(path)
+    dialog.file_edit.setText(str(path))
+    calls = []
+
+    def record(engine, wmo, start, end, **kwargs):
+        calls.append((wmo, start, end))
+
+    monkeypatch.setattr("meteoregik.ui.import_dialog.recompute_range", record)
+
+    dialog._run_import()
+
+    assert calls == [(27707, date(2020, 6, 1), date(2020, 6, 1))]
+
+
+def test_conflicting_rows_have_specific_message_and_no_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    from openpyxl import load_workbook
+    wb = load_workbook(dialog.file_edit.text())
+    wb.active.append([27707, 2020, 3, 2, 99.0, 4.0, 1.0, 2.0])
+    wb.save(dialog.file_edit.text())
+    messages = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda parent, title, text: messages.append((title, text)))
+
+    dialog._run_import()
+
+    assert len(messages) == 1 and messages[0][0] == "Противоречивые строки файла"
+    assert "27707" in messages[0][1] and "3 и 4" in messages[0][1]
+    assert not dialog.success_label.text()
+    with dialog.engine.connect() as conn:
+        assert conn.execute(select(gg_readings)).first() is None
+
+
+def test_duplicate_report_separates_existing_keys_from_file_repeats() -> None:
+    report = ImportReport(27705, "Калуга", date(2020, 1, 1), date(2020, 1, 2),
+                          total_rows=5, imported_rows=2, skipped_rows=3, duplicates_in_file=1)
+
+    text = format_import_report(report)
+
+    assert "Пропущено всего: 3" in text
+    assert "Из них уже в базе: 2" in text
+    assert "Одинаковые повторы внутри файла: 1" in text
+
+
+def test_many_station_report_scrolls_and_last_station_remains_accessible() -> None:
+    _qapp()
+    station_reports = tuple(StationImportReport(
+        wmo_index=27000 + index, station_name=f"Станция {index}",
+        period_start=date(2020, 1, 1), period_end=date(2020, 1, 1),
+        imported_rows=1, skipped_rows=0,
+        new_period_start=date(2020, 1, 1), new_period_end=date(2020, 1, 1),
+    ) for index in range(30))
+    report = ImportReport(None, None, date(2020, 1, 1), date(2020, 1, 1),
+                          total_rows=30, imported_rows=30, skipped_rows=0, stations=station_reports)
+    dialog = ImportDialog(get_engine(":memory:"))
+    dialog.report_label.setText(format_import_report(report))
+    dialog.show()
+    QApplication.processEvents()
+
+    scrollbar = dialog.report_area.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    scrollbar.setValue(scrollbar.maximum())
+    QApplication.processEvents()
+    last_line_y = dialog.report_label.height() - dialog.report_label.fontMetrics().lineSpacing()
+    assert last_line_y - scrollbar.value() < dialog.report_area.viewport().height()
+    assert "Станция 29 (ВМО 27029)" in dialog.report_label.text()
+    dialog.close()
+
+
+def test_repeated_import_repairs_all_missing_stations_without_checkbox(tmp_path: Path) -> None:
+    dialog = _multi_station_dialog(tmp_path)
+    GgImporter(dialog.engine).import_file(dialog.file_edit.text())
+    assert not _calculated_stations(dialog)
+
+    dialog._run_import()
+
+    assert _calculated_stations(dialog) == {27705, 27707}
+    assert "Импортировано: 0" in dialog.report_label.text()
+
+
+def _rp5_day_dialog(tmp_path: Path, old_hours: list[int], new_hours: list[int]) -> ImportDialog:
+    from meteoregik.importers.rp5_importer import Rp5Importer
+    _qapp()
+    engine = get_engine(tmp_path / "sets.sqlite3")
+    run_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(stations.insert().values(wmo_index=27704, name="Мосальск"))
+    paths = []
+    for label, hours in (("old", old_hours), ("new", new_hours)):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["# Метеостанция Мосальск, Россия, WMO_ID=27704, выборка"])
+        ws.append(["#"])
+        ws.append(["Местное время в Мосальске", "T"])
+        for hour in hours:
+            ws.append([f"01.01.2020 {hour:02d}:00", hour])
+        path = tmp_path / f"{label}.xlsx"
+        wb.save(path)
+        paths.append(str(path))
+    Rp5Importer(engine).import_file(paths[0])
+    recompute_range(engine, 27704, date(2020, 1, 1), date(2020, 1, 1))
+    dialog = ImportDialog(engine)
+    dialog.file_edit.setText(paths[1])
+    return dialog
+
+
+@pytest.mark.parametrize("choice", ["Оставить старые", "изменить на новые"])
+def test_rp5_dialog_selects_complete_day_and_recomputes_without_second_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, choice: str,
+) -> None:
+    old_hours, new_hours = [0, 3, 6, 9, 12, 15], [0, 6, 12, 18]
+    dialog = _rp5_day_dialog(tmp_path, old_hours, new_hours)
+    shown = []
+    errors = []
+
+    def choose(box: QMessageBox) -> int:
+        assert box.windowTitle() == "Изменение сроков наблюдений"
+        assert box.defaultButton().text() == box.escapeButton().text() == "Оставить старые"
+        shown.append(box.text())
+        _click_button_containing(box, choice)
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", choose)
+    monkeypatch.setattr(QMessageBox, "critical", lambda parent, title, text: errors.append((title, text)))
+    dialog._run_import()
+
+    assert not errors and len(shown) == 1
+    assert "01.01.2020" in shown[0] and "7.50" in shown[0] and "9.00" in shown[0]
+    assert all(f"{hour:02d}:00" in shown[0] for hour in old_hours + new_hours)
+    with dialog.engine.connect() as conn:
+        actual = list(conn.scalars(select(rp5_readings.c.obs_time).order_by(rp5_readings.c.obs_time)))
+        value = conn.scalar(select(computed_indicators.c.value).where(
+            computed_indicators.c.wmo_index == 27704, computed_indicators.c.parameter == "T",
+            computed_indicators.c.stat_type == "avg", computed_indicators.c.period_type == "day",
+        ))
+    assert actual == [time(hour) for hour in (old_hours if choice == "Оставить старые" else new_hours)]
+    assert value == (7.5 if choice == "Оставить старые" else 9.0)
+    assert dialog.success_label.text() == "Импорт завершён успешно"
+
+
+def test_rp5_more_complete_day_updates_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dialog = _rp5_day_dialog(tmp_path, [0, 6, 12, 18], list(range(0, 24, 3)))
+
+    def unexpected(*args: object) -> int:
+        pytest.fail("Более полный набор не должен вызывать подтверждений")
+
+    monkeypatch.setattr(QMessageBox, "exec", unexpected)
+    dialog._run_import()
+    with dialog.engine.connect() as conn:
+        assert len(conn.execute(select(rp5_readings)).all()) == 8
+        assert conn.scalar(select(computed_indicators.c.value).where(
+            computed_indicators.c.parameter == "T", computed_indicators.c.stat_type == "avg",
+            computed_indicators.c.period_type == "day")) == 10.5
+    assert "Заменено прежних строк: 4" in dialog.report_label.text()
 

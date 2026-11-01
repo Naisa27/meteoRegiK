@@ -19,6 +19,11 @@ station_name — название из справочника: после под
 plan.md, "Формат rp5"). Первый столбец файла ("Местное время в <Станция>")
 всегда дата+время — определяется позиционно, т.к. его название зависит от
 имени станции.
+
+Одинаковые записи одного срока загружаются один раз, противоречивые внутри
+файла отклоняют весь файл. Для уже сохранённых суток выбирается полный
+набор: больше сроков с температурой — новый автоматически, остальные
+различия требуют явного выбора пользователя. Смешивания двух наборов нет.
 """
 
 from __future__ import annotations
@@ -29,11 +34,14 @@ from collections.abc import Callable
 from datetime import datetime
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import delete
 from sqlalchemy.engine import Engine
 
 from meteoregik.db.schema import rp5_readings
-from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
+from meteoregik.calculations.pending import mark_pending, mark_range
+from meteoregik.importers.base import ImportFormatError, ImportReport, Importer, StationImportReport
+from meteoregik.importers.rows import new_unique_rows
+from meteoregik.importers.rp5_days import DayResolver, plan_days
 from meteoregik.stations.matching import StationNameMismatch, confirm_station_name, require_stations
 
 # Где в файле искать индекс — для сообщения StationNotFoundError
@@ -111,13 +119,15 @@ def _clean(value: object) -> object | None:
 
 class Rp5Importer(Importer):
     def __init__(
-        self, engine: Engine, confirm_name_mismatch: Callable[[StationNameMismatch], bool] | None = None
+        self, engine: Engine, confirm_name_mismatch: Callable[[StationNameMismatch], bool] | None = None,
+        confirm_day_replacement: DayResolver | None = None,
     ) -> None:
         """confirm_name_mismatch — вопрос пользователю, загружать ли файл по
         индексу, если станция в справочнике названа иначе, чем в файле
         (True — загружать). Без него такое расхождение останавливает импорт."""
         self.engine = engine
         self._confirm_name_mismatch = confirm_name_mismatch
+        self._confirm_day_replacement = confirm_day_replacement
 
     def import_file(self, file_path: str) -> ImportReport:
         name_in_file, wmo_index = _parse_station_header(file_path)
@@ -141,7 +151,7 @@ class Rp5Importer(Importer):
         source_file = os.path.basename(file_path)
 
         parsed_rows = []
-        for record in df.to_dict(orient="records"):
+        for excel_row, record in enumerate(df.to_dict(orient="records"), start=header_row + 2):
             dt = datetime.strptime(str(record[datetime_col]).strip(), "%d.%m.%Y %H:%M")
             row = {
                 "wmo_index": wmo_index,
@@ -149,6 +159,7 @@ class Rp5Importer(Importer):
                 "obs_date": dt.date(),
                 "obs_time": dt.time(),
                 "source_file": source_file,
+                "_excel_row": excel_row,
             }
             for source_col, target_col in RP5_COLUMN_MAP.items():
                 if source_col in record:
@@ -162,20 +173,38 @@ class Rp5Importer(Importer):
         period_end = max(r["obs_date"] for r in parsed_rows)
 
         with self.engine.begin() as conn:
-            existing_keys = set(
-                conn.execute(
-                    select(rp5_readings.c.obs_date, rp5_readings.c.obs_time).where(
-                        rp5_readings.c.wmo_index == wmo_index
-                    )
-                ).all()
+            # Проверяем и повторы известных ключей: суточный набор может
+            # заменить старый, поэтому кандидат должен быть однозначным.
+            unique_rows, duplicates = new_unique_rows(
+                parsed_rows,
+                set(),
+                ("wmo_index", "obs_date", "obs_time"),
+                tuple(RP5_COLUMN_MAP.values()),
+                frozenset(column.name for column in rp5_readings.c if column.type.python_type is str),
             )
+            text_fields = frozenset(column.name for column in rp5_readings.c if column.type.python_type is str)
+            plan = plan_days(conn, wmo_index, station_name, unique_rows, tuple(RP5_COLUMN_MAP.values()),
+                             text_fields, self._confirm_day_replacement)
+            for day in plan.replace_dates:
+                conn.execute(delete(rp5_readings).where(
+                    rp5_readings.c.wmo_index == wmo_index, rp5_readings.c.obs_date == day,
+                ))
+            if plan.rows:
+                conn.execute(rp5_readings.insert(), plan.rows)
+            if plan.old_main != plan.new_main and plan.archive_start is not None and plan.archive_end is not None:
+                # Смена основного осадочного ряда влияет и на неизменённые дни.
+                # Их ручные дневные решения сохраняет обычный conflict_resolver.
+                mark_range(conn, wmo_index, plan.archive_start, plan.archive_end, auto_accept=False)
+            mark_pending(conn, wmo_index, plan.accepted_dates, auto_accept=True)
 
-            new_rows = [
-                row for row in parsed_rows if (row["obs_date"], row["obs_time"]) not in existing_keys
-            ]
-
-            if new_rows:
-                conn.execute(rp5_readings.insert(), new_rows)
+        new_period_start = min(plan.accepted_dates) if plan.accepted_dates else None
+        new_period_end = max(plan.accepted_dates) if plan.accepted_dates else None
+        station_report = StationImportReport(
+            wmo_index=wmo_index, station_name=station_name, period_start=period_start, period_end=period_end,
+            imported_rows=len(plan.rows), skipped_rows=len(parsed_rows) - len(plan.rows),
+            new_period_start=new_period_start, new_period_end=new_period_end,
+            duplicates_in_file=sum(duplicates.values()), replaced_rows=plan.replaced_rows,
+        )
 
         return ImportReport(
             wmo_index=wmo_index,
@@ -183,6 +212,9 @@ class Rp5Importer(Importer):
             period_start=period_start,
             period_end=period_end,
             total_rows=len(parsed_rows),
-            imported_rows=len(new_rows),
-            skipped_rows=len(parsed_rows) - len(new_rows),
+            imported_rows=len(plan.rows),
+            skipped_rows=len(parsed_rows) - len(plan.rows),
+            stations=(station_report,),
+            duplicates_in_file=sum(duplicates.values()),
+            replaced_rows=plan.replaced_rows,
         )

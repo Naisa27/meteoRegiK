@@ -9,6 +9,10 @@ wmo_index напрямую (без FK на stations.id — см. plan.md, п.11 
 station_name берётся из stations.name по wmo_index и кэшируется для
 читаемости.
 
+Файл может содержать несколько станций: отчёт включает отдельные периоды
+и количество новых строк каждой. Внутренние точные повторы новых ключей
+пропускаются, противоречивые запрещают загрузку всего файла до вставки.
+
 Строка без единого значимого значения (все четыре — Tavg, Tmax, Tmin, RRR —
 пусты) не загружается и не участвует ни в периоде отчёта, ни в создании
 проверке станции (пустая строка с неизвестным индексом импорт не
@@ -24,8 +28,10 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from meteoregik.calculations.pending import mark_pending
 from meteoregik.db.schema import gg_readings
 from meteoregik.importers.base import ImportFormatError, ImportReport, Importer
+from meteoregik.importers.rows import new_unique_rows, station_reports
 from meteoregik.stations.matching import require_stations
 
 REQUIRED_COLUMNS = ("Индекс ВМО", "Год", "Месяц", "День")
@@ -58,7 +64,7 @@ class GgImporter(Importer):
         source_file = os.path.basename(file_path)
 
         parsed_rows = []
-        for record in df.to_dict(orient="records"):
+        for excel_row, record in enumerate(df.to_dict(orient="records"), start=2):
             wmo_index = int(record["Индекс ВМО"])
             obs_date = date(int(record["Год"]), int(record["Месяц"]), int(record["День"]))
             parsed_rows.append(
@@ -69,6 +75,7 @@ class GgImporter(Importer):
                     "t_min": _clean(record.get("Tmin")),
                     "t_max": _clean(record.get("Tmax")),
                     "rrr_precipitation": _clean(record.get("RRR")),
+                    "_excel_row": excel_row,
                 }
             )
 
@@ -97,6 +104,7 @@ class GgImporter(Importer):
                     "t_max": r["t_max"],
                     "rrr_precipitation": r["rrr_precipitation"],
                     "source_file": source_file,
+                    "_excel_row": r["_excel_row"],
                 }
                 for r in parsed_rows
             ]
@@ -110,23 +118,28 @@ class GgImporter(Importer):
                 ).all()
             )
 
-            new_rows = [
-                row
-                for row in rows_to_insert
-                if (row["wmo_index"], row["obs_date"]) not in existing_keys
-            ]
+            new_rows, duplicates = new_unique_rows(
+                rows_to_insert, existing_keys, ("wmo_index", "obs_date"), VALUE_FIELDS
+            )
 
             if new_rows:
                 conn.execute(gg_readings.insert(), new_rows)
+                for wmo_index in sorted(touched_wmo_indexes):
+                    days = [row["obs_date"] for row in new_rows if row["wmo_index"] == wmo_index]
+                    if days:
+                        mark_pending(conn, wmo_index, days)
 
-        primary_wmo_index = parsed_rows[0]["wmo_index"]
+        reports = station_reports(rows_to_insert, new_rows, duplicates)
+        single = reports[0] if len(reports) == 1 else None
         return ImportReport(
-            wmo_index=primary_wmo_index,
-            station_name=station_names[primary_wmo_index],
+            wmo_index=single.wmo_index if single else None,
+            station_name=single.station_name if single else None,
             period_start=period_start,
             period_end=period_end,
             total_rows=total_rows,
             imported_rows=len(new_rows),
             skipped_rows=len(parsed_rows) - len(new_rows),
             rows_without_data=rows_without_data,
+            stations=reports,
+            duplicates_in_file=sum(duplicates.values()),
         )

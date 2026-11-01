@@ -27,6 +27,7 @@ conflict_resolver.
 from __future__ import annotations
 
 from calendar import monthrange
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Callable, Literal
@@ -37,6 +38,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations.anomalies import mark_stale
 from meteoregik.calculations import precipitation, transitions
+from meteoregik.calculations.pending import begin_recomputation, finish_recomputation
 from meteoregik.calculations.temperature import Stats, daily_stats, decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings
 
@@ -172,6 +174,7 @@ def _resolve_and_store(
     stats: Stats,
     new_source_file: str | None,
     conflict_resolver: ConflictResolver | None,
+    *, missing_only: bool = False,
 ) -> None:
     with engine.begin() as conn:
         existing = _existing_stats(conn, wmo_index, parameter, period_type, period_start, period_end)
@@ -185,6 +188,11 @@ def _resolve_and_store(
             new_value = stats[stat_type]
             old = existing.get(stat_type)
             old_value = old["value"] if old else None
+
+            if missing_only and old_value is not None:
+                # Достраивание пропущенного показателя не отменяет ранее
+                # выбранные суточные значения остальных показателей.
+                continue
 
             if new_value is None:
                 if old is not None:
@@ -299,6 +307,8 @@ def recompute_range(
     end: date,
     progress_callback: Callable[[date], None] | None = None,
     conflict_resolver: ConflictResolver | None = None,
+    *,
+    periods_only: bool = False,
 ) -> None:
     """progress_callback(day), если передан, вызывается после пересчёта
     каждого дня диапазона. conflict_resolver(ValueConflict), если передан,
@@ -310,26 +320,41 @@ def recompute_range(
     первым делом: если пересчёт оборвётся на середине, станция всё равно не
     останется со старыми отклонениями при новых суточных значениях. Так же
     помечаются сезоны дат перехода температуры (calculations/transitions.py),
-    в окно которых попал диапазон."""
+    в окно которых попал диапазон. periods_only восстанавливает производные
+    периоды поверх сохранённых суток, не отменяя дневные решения пользователя.
+    Устойчивая очередь очищается лишь после всех уровней расчёта."""
     with engine.begin() as conn:
+        snapshot = begin_recomputation(conn, wmo_index, start, end, periods_only=periods_only)
         mark_stale(conn, wmo_index)
         transitions.mark_stale(conn, wmo_index, start, end)
         # Основной ряд сроков осадков — один на станцию и на весь пересчёт
         main_series = precipitation.main_series(conn, wmo_index)
+    automatic_days = sorted(item.day for item in snapshot if item.auto_accept)
+    raw_days = {item.day for item in snapshot if not item.periods_only}
+    missing_days = {item.day for item in snapshot if item.missing_only and not item.auto_accept}
+
+    def resolve(conflict: ValueConflict) -> ConflictChoice:
+        index = bisect_left(automatic_days, conflict.period_start)
+        if index < len(automatic_days) and automatic_days[index] <= conflict.period_end:
+            return "new"
+        return conflict_resolver(conflict) if conflict_resolver is not None else "new"
+
     day = start
     while day <= end:
-        stats = daily_stats(engine, wmo_index, day)
-        source_file = None
-        if any(v is not None for v in stats.values()):
-            source_file = _source_file_for_day(engine, wmo_index, day)
-        day_sum, sum_source = precipitation.daily_sum(engine, wmo_index, day, main_series)
-        # У каждого параметра свой источник: осадки дня могут быть из rp5 при
-        # температуре из ГГ (в ГГ осадки за этот день пусты)
-        for parameter, values, source in (
-            (PARAMETER_TEMPERATURE, stats, source_file),
-            (precipitation.PARAMETER, {precipitation.STAT_SUM: day_sum}, sum_source),
-        ):
-            _resolve_and_store(engine, wmo_index, parameter, "day", day, day, values, source, conflict_resolver)
+        if not periods_only or day in raw_days:
+            stats = daily_stats(engine, wmo_index, day)
+            source_file = None
+            if any(v is not None for v in stats.values()):
+                source_file = _source_file_for_day(engine, wmo_index, day)
+            day_sum, sum_source = precipitation.daily_sum(engine, wmo_index, day, main_series)
+            # У каждого параметра свой источник: осадки дня могут быть из rp5 при
+            # температуре из ГГ (в ГГ осадки за этот день пусты)
+            for parameter, values, source in (
+                (PARAMETER_TEMPERATURE, stats, source_file),
+                (precipitation.PARAMETER, {precipitation.STAT_SUM: day_sum}, sum_source),
+            ):
+                _resolve_and_store(engine, wmo_index, parameter, "day", day, day, values, source, resolve,
+                                   missing_only=day in missing_days)
         if progress_callback is not None:
             progress_callback(day)
         day += timedelta(days=1)
@@ -352,5 +377,7 @@ def recompute_range(
                 continue  # сезонные значения есть только у осадков
             stats = period_stats(_stored_days(engine, wmo_index, parameter, period_start, period_end))
             _resolve_and_store(
-                engine, wmo_index, parameter, period_type, period_start, period_end, stats, None, conflict_resolver
+                engine, wmo_index, parameter, period_type, period_start, period_end, stats, None, resolve
             )
+    with engine.begin() as conn:
+        finish_recomputation(conn, wmo_index, snapshot)

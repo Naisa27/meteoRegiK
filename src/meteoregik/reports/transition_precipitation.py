@@ -17,6 +17,8 @@ Qt-независимо, как reports/precipitation_data.py: вкладка т
   вместе покрывают все дни подряд, без перекрытий.
 Если хотя бы одной из двух дат нет ("не было" или "нет данных"), периода в
 этом году нет — причина сохраняется (PeriodGap) для подсказки.
+Предварительные даты при неполной температурной истории тоже задают
+границы периода: по ним считаются длительность, осадки и средние суммы.
 
 Пропуски осадков внутри периода (решение пользователя): сумма — по дням с
 данными, число дней без данных показывается в подсказке; сумма такого
@@ -43,7 +45,6 @@ from meteoregik.calculations.transitions import (
     AUTUMN,
     METHODS,
     SPRING,
-    STATUS_DATE,
     STATUS_NONE,
     StationTransitions,
     Transition,
@@ -193,7 +194,7 @@ def _bounds(
     problems = [
         f"{name} переход через {threshold} °C — {_status_word(item)}"
         for name, item in ((first_name, first), (last_name, last))
-        if item is None or item.status != STATUS_DATE
+        if item is None or item.day is None
     ]
     return "; ".join(problems) if problems else None
 

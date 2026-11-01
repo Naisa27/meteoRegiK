@@ -66,6 +66,8 @@ from meteoregik.preferences import Preferences
 from meteoregik.reports import table_palette
 from meteoregik.reports.transitions_view import (
     KIND_NO_DATA,
+    KIND_PROVISIONAL,
+    PROVISIONAL_LEGEND,
     KIND_NONE,
     METHODS_ORDER,
     MONTHS,
@@ -124,10 +126,12 @@ METHODS_HELP = (
     "периода.<br>"
     "Если перед каждым похолоданием был всего один тёплый период, даты совпадают. Если "
     "тепло идёт с перерывами, дата по «Климату России» обычно получается позже.\n\n"
-    "<b>Когда в ячейке «нет данных».</b> Дата считается, только если полные все месяцы "
+    "<b>Предварительные даты.</b> Найденная дата показывается на янтарном фоне со знаком ≈, если неполны месяцы "
     "от начала поиска (весной — от 1 января, осенью — от 1 июля) до месяца, следующего за "
     "месяцем перехода. Полным считается месяц, в котором пропущено не больше 5 дней и не "
-    "больше 3 дней подряд.\n\n"
+    "больше 3 дней подряд. Предварительные даты участвуют в расчётах длительности, осадков "
+    "и средних. Подсказка показывает число пропущенных дней сезона и максимальный пропуск подряд. "
+    "Если данных для определения даты нет, показывается «нет данных».\n\n"
     "Пример расчёта по шагам — в путеводителе."
 )
 _NO_VALUE = "—"
@@ -187,6 +191,10 @@ class TableModel(QAbstractTableModel):
             return tooltip_html(cell.tip) if cell.tip else None
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int(Qt.AlignmentFlag.AlignCenter)
+        if role == Qt.ItemDataRole.BackgroundRole and cell.kind == KIND_PROVISIONAL:
+            return QBrush(QColor(theme.PROVISIONAL_FILL))
+        if role == Qt.ItemDataRole.ForegroundRole and cell.kind == KIND_PROVISIONAL:
+            return QColor(table_palette.TEXT)
         if role == Qt.ItemDataRole.ForegroundRole and cell.kind in (KIND_NONE, KIND_NO_DATA):
             return QColor(theme.TEXT_SECONDARY)
         if role == Qt.ItemDataRole.FontRole and row.mean:
@@ -540,6 +548,13 @@ class TransitionsDialog(QDialog):
             title_row.addWidget(guide_link)
         layout.addLayout(title_row)
 
+        self.provisional_legend = QLabel(
+            f'<span style="background-color:{theme.PROVISIONAL_FILL}; color:{table_palette.TEXT};">'
+            f' {PROVISIONAL_LEGEND} </span> — по неполным данным; пояснение в подсказке ячейки'
+        )
+        self.provisional_legend.setWordWrap(True)
+        layout.addWidget(self.provisional_legend)
+
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self._hints: list[QLabel] = []
@@ -590,9 +605,17 @@ class TransitionsDialog(QDialog):
         # переносом: строка растёт вниз, а не вширь
         self.state_table.setWordWrap(True)
         header = self.state_table.horizontalHeader()
+        # Stretch отдавал последнему столбцу остаток ширины, иногда лишь
+        # несколько пикселей. Сохраняем читаемую ширину и разрешаем прокрутку;
+        # длинный список сезонов переносится по строкам вместо обрезки.
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(6, max(300, header.fontMetrics().horizontalAdvance(STATE_COLUMNS[6].title) + 32))
+        self.state_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        header.sectionResized.connect(lambda *_args: self.state_table.resizeRowsToContents())
         for column in _NO_DATA_COLUMNS:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
-            header.resizeSection(column, 240)
+            header.resizeSection(column, 150)
             self.state_table.setItemDelegateForColumn(column, RichTextDelegate(self.state_table))
         self.state_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.state_table, stretch=1)

@@ -17,6 +17,8 @@ greeting_widget.py (спокойные бело-голубые тона + акц
 
 from __future__ import annotations
 
+from meteoregik.reports.table_palette import PROVISIONAL_FILL
+
 from meteoregik.resources import STATIC_DIR
 
 BG = "#F6F8FA"
