@@ -29,7 +29,7 @@ $check = Join-Path $env:TEMP "meteoregik-smoke-$([guid]::NewGuid().ToString('N')
 $env:METEOREGIK_DATA_DIR = Join-Path $check 'data'
 $env:METEOREGIK_SMOKE_TEST = Join-Path $check 'out'
 try {
-    $process = Start-Process -FilePath 'dist\meteoRegiK\meteoRegiK.exe' -PassThru
+    $process = Start-Process -FilePath 'dist\meteoRegiK\meteoRegiK.exe' -WindowStyle Hidden -PassThru
     if (-not $process.WaitForExit(120000)) {
         $process.Kill()
         throw 'Самопроверка: приложение не закрылось за 2 минуты'
@@ -45,7 +45,15 @@ try {
 }
 finally {
     Remove-Item Env:METEOREGIK_DATA_DIR, Env:METEOREGIK_SMOKE_TEST -ErrorAction SilentlyContinue
-    if (Test-Path $check) { Remove-Item $check -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $check) {
+        $resolvedCheck = (Resolve-Path -LiteralPath $check).Path
+        $tempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+        if (-not $resolvedCheck.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            (Split-Path -Leaf $resolvedCheck) -notmatch '^meteoregik-smoke-[0-9a-f]{32}$') {
+            throw "Отказ от очистки неожиданного пути: $resolvedCheck"
+        }
+        Remove-Item -LiteralPath $resolvedCheck -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($SkipInstaller) { Write-Host 'Готово: dist\meteoRegiK (установщик пропущен)'; exit 0 }
