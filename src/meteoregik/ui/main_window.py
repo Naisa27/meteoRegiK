@@ -16,6 +16,7 @@ from meteoregik.ui.import_dialog import ImportDialog
 from meteoregik.ui.query_panel import AggregateViewDialog
 from meteoregik.ui.station_directory import StationDirectoryDialog
 from meteoregik.ui.transitions_dialog import TransitionsDialog
+from meteoregik.ui.whats_new import WhatsNewDialog
 from meteoregik.version import app_version
 
 
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         greeting.map_requested.connect(self._open_map)
         greeting.station_directory_requested.connect(self._open_station_directory)
         greeting.guide_requested.connect(self._open_guide)
+        greeting.whats_new_requested.connect(self._open_whats_new)
         layout.addWidget(greeting, stretch=1)
         self._greeting = greeting
         self._initial_focus_set = False
@@ -113,6 +115,9 @@ class MainWindow(QMainWindow):
         if self._guide is not None:
             self._guide.close()
         super().closeEvent(event)
+
+    def _open_whats_new(self) -> None:
+        exec_window_modal(WhatsNewDialog(self))
 
     def _open_import_dialog(self) -> None:
         dialog = ImportDialog(self.engine, self)

@@ -48,7 +48,7 @@ def test_format_import_report_with_period():
     text = format_import_report(report)
 
     assert "Мосальск" in text
-    assert "2020-01-01 — 2020-12-31" in text
+    assert "01.01.2020 — 31.12.2020" in text
     assert "Всего строк в файле: 100" in text
     assert "Импортировано: 90" in text
     assert "Пропущено (уже существуют): 10" in text
@@ -98,7 +98,7 @@ def test_format_conflict_message_day_level():
     text = format_conflict_message(conflict)
 
     assert "максимальная температура" in text
-    assert "2015-01-21" in text
+    assert "21.01.2015" in text
     assert "Сухиничи 1959-2025_формат_ГГ.xlsx" in text
     assert "-2.3" in text
     assert "Сухиничи_2015-2019_rp5.xls" in text
@@ -134,7 +134,7 @@ def test_format_conflict_message_without_source_file():
     text = format_conflict_message(conflict)
 
     assert "неизвестный файл" in text
-    assert "2015-01-01 — 2015-01-10" in text
+    assert "01.01.2015 — 10.01.2015" in text
 
 
 def _make_conflict(day: int, old_value: float, new_value: float) -> ValueConflict:
@@ -559,6 +559,7 @@ def test_many_station_report_scrolls_and_last_station_remains_accessible() -> No
     last_line_y = dialog.report_label.height() - dialog.report_label.fontMetrics().lineSpacing()
     assert last_line_y - scrollbar.value() < dialog.report_area.viewport().height()
     assert "Станция 29 (ВМО 27029)" in dialog.report_label.text()
+    assert dialog.report_label.text().count("Период: 01.01.2020 — 01.01.2020") == 31
     dialog.close()
 
 

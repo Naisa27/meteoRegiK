@@ -37,6 +37,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from meteoregik.guide import GUIDE_TITLE
 from meteoregik.resources import DASHBOARD_ICON_PATH, LOGO_PATH
+from meteoregik.ui.whats_new import whats_new_title
 from meteoregik.ui import theme
 from meteoregik.ui.buttons import reserve_focus_width, tinted_icon
 
@@ -77,6 +78,7 @@ class GreetingWidget(QWidget):
     map_requested = Signal()
     station_directory_requested = Signal()
     guide_requested = Signal()
+    whats_new_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -166,7 +168,18 @@ class GreetingWidget(QWidget):
         self.guide_btn.setToolTip("Как работать с программой: порядок действий и описание каждого экрана")
         reserve_focus_width(self.guide_btn)
         self.guide_btn.clicked.connect(self.guide_requested.emit)
-        layout.addWidget(self.guide_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        help_row = QHBoxLayout()
+        help_row.setSpacing(16)
+        help_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        help_row.addWidget(self.guide_btn)
+        self.whats_new_btn = QPushButton(whats_new_title())
+        self.whats_new_btn.setObjectName("skySoft")
+        self.whats_new_btn.setStyleSheet(theme.BUTTON_QSS)
+        self.whats_new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        reserve_focus_width(self.whats_new_btn)
+        self.whats_new_btn.clicked.connect(self.whats_new_requested.emit)
+        help_row.addWidget(self.whats_new_btn)
+        layout.addLayout(help_row)
 
         layout.addSpacing(26)
 

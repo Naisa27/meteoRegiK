@@ -34,7 +34,7 @@ def test_section_keys_and_titles_are_unique():
 def test_every_main_screen_button_has_a_section_with_the_same_title(qapp):
     """Новая кнопка на главном экране без раздела в путеводителе — тест падает."""
     widget = GreetingWidget()
-    screens = {b.text() for b in widget.findChildren(QPushButton)} - {guide.GUIDE_TITLE}
+    screens = {b.text() for b in widget.findChildren(QPushButton)} - {guide.GUIDE_TITLE, widget.whats_new_btn.text()}
 
     assert screens <= {s.title for s in guide.SECTIONS}
 

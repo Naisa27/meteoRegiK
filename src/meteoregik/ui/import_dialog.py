@@ -102,9 +102,9 @@ def format_conflict_message(conflict: ValueConflict) -> str:
     old_source = conflict.old_source_file or "неизвестный файл"
     new_source = conflict.new_source_file or "неизвестный файл"
     period_range = (
-        conflict.period_start.isoformat()
+        f"{conflict.period_start:%d.%m.%Y}"
         if conflict.period_start == conflict.period_end
-        else f"{conflict.period_start.isoformat()} — {conflict.period_end.isoformat()}"
+        else f"{conflict.period_start:%d.%m.%Y} — {conflict.period_end:%d.%m.%Y}"
     )
     return (
         f"Станция: ВМО {conflict.wmo_index}\n\n"
@@ -176,7 +176,7 @@ def format_import_report(report: ImportReport) -> str:
     без QApplication."""
     period = "—"
     if report.period_start is not None and report.period_end is not None:
-        period = f"{report.period_start.isoformat()} — {report.period_end.isoformat()}"
+        period = f"{report.period_start:%d.%m.%Y} — {report.period_end:%d.%m.%Y}"
     multiple = len(report.stations) > 1
     skipped = (
         f"Пропущено (уже существуют): {report.skipped_rows}"
@@ -204,7 +204,7 @@ def format_import_report(report: ImportReport) -> str:
             lines.extend([
                 "",
                 f"{station.station_name} (ВМО {station.wmo_index})",
-                f"Период: {station.period_start.isoformat()} — {station.period_end.isoformat()}",
+                f"Период: {station.period_start:%d.%m.%Y} — {station.period_end:%d.%m.%Y}",
                 f"Импортировано: {station.imported_rows}; пропущено: {station.skipped_rows}",
             ])
     return "\n".join(lines)
