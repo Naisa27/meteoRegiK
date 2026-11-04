@@ -62,6 +62,7 @@ def test_old_database_with_data_has_pending_updates_named_for_the_user(old_datab
     assert pending_data_updates(engine) == [
         "суммы осадков за сутки, декаду, месяц и год",
         "суммы осадков по сезонам (зима, весна, лето, осень)",
+        "дни со снегом, высота снега и сильные морозы при малоснежье",
     ]
 
 
@@ -113,7 +114,7 @@ def test_run_upgrade_calculates_makes_backup_and_reports_stations(old_database, 
     assert _version(engine) == CURRENT_SCHEMA_VERSION
     assert _precipitation_rows(engine) == 5  # день, декада, месяц, сезон, год
     assert backup_path(db_path).exists()
-    assert shown == [(1, 1, "Сухиничи (27707)")]
+    assert shown == [(1, 1, "Сухиничи (27707)"), (1, 1, "Сухиничи (27707)")]
 
 
 def test_failed_upgrade_leaves_database_untouched_and_tells_the_user(old_database, monkeypatch):
@@ -141,6 +142,32 @@ def test_failed_upgrade_leaves_database_untouched_and_tells_the_user(old_databas
 
 def test_failure_text_without_backup_does_not_mention_a_copy():
     assert "Копия базы" not in failure_text(RuntimeError("сбой"), None)
+
+
+@pytest.mark.parametrize("error", [OSError("нет места для копии"), sqlite3.OperationalError("копия недоступна")])
+def test_failed_backup_never_starts_migration(old_database, monkeypatch, error):
+    _qapp()
+    db_path, engine = old_database
+    messages = []
+
+    def broken_backup(path):
+        raise error
+
+    def unexpected_migration(*args, **kwargs):
+        pytest.fail("Миграция не должна начинаться без резервной копии")
+
+    monkeypatch.setattr(upgrade_dialog, "backup_database", broken_backup)
+    monkeypatch.setattr(upgrade_dialog, "run_migrations", unexpected_migration)
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(
+        lambda parent, title, text: messages.append((title, text))))
+    assert run_upgrade(engine, db_path, pending_data_updates(engine)) is False
+    assert _version(engine) == 6
+    with engine.connect() as conn:
+        assert conn.execute(select(rp5_readings.c.sss_snow_depth)).all() == [(None,)]
+        assert conn.execute(select(computed_indicators.c.id)).all() == []
+    assert len(messages) == 1
+    assert str(error) in messages[0][1]
+    assert "База данных не изменена" in messages[0][1]
 
 
 def test_upgrade_dialog_cannot_be_closed_while_calculating():

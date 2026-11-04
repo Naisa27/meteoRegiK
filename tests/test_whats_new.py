@@ -19,6 +19,6 @@ def test_whats_new_button_opens_window_for_installed_version() -> None:
     dialog = show.call_args.args[0]
     assert isinstance(dialog, WhatsNewDialog)
     assert dialog.windowTitle() == whats_new_title()
-    assert "Предварительные" in dialog.text.toPlainText()
+    assert "Снежный покров" in dialog.text.toPlainText()
     assert "rp5" in dialog.text.toPlainText()
     window.close()

@@ -16,6 +16,7 @@ Qt-интерфейса.
 from __future__ import annotations
 
 TEXT = "#26333A"  # тот же, что theme.TEXT_PRIMARY
+SNOW_FILL = "#D8ECFA"  # наличие снега и морозные дни: голубая заливка
 PROVISIONAL_FILL = "#FFF0CC"  # предполагаемые значения: янтарный фон и знак ≈
 ACCENT_TEXT = "#8B1E1E"  # тёмно-красный: названия месяцев, номера дней/лет
 DECADE_FILL = "#CDEFEA"  # светло-бирюзовый — столбцы декад

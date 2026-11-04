@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations.precipitation import season_bounds
+from meteoregik.calculations import snow
 from meteoregik.calculations.temperature import decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, pending_recomputations, rp5_readings
 
@@ -171,6 +172,27 @@ def _find_missing(conn: Connection, wmo_index: int) -> tuple[set[date], set[date
         for key in _ancestor_keys(day, param, stat):
             ancestors.setdefault(key, day)
     missing_periods = {anchor for key, anchor in ancestors.items() if key not in present}
+    # Снег ремонтируется отдельно поверх сохранённой температуры, поэтому
+    # отсутствие его кэша не должно заново разрешать суточные конфликты T/R.
+    snow_rows = set(conn.execute(select(table.c.period_type, table.c.period_start,
+        table.c.period_end, table.c.parameter, table.c.stat_type).where(
+            table.c.wmo_index == wmo_index, table.c.parameter.in_(("S", "SNOW_DEPTH", "FROST_LOW_SNOW")),
+            table.c.value.is_not(None))).all())
+    bounds = snow.archive_bounds(conn, wmo_index)
+    if bounds is not None:
+        temperatures = {day for day, parameter, stat in daily if (parameter, stat) == ("T", "avg")}
+        stale = {start for kind, start, end, parameter, stat in snow_rows
+                 if kind == "day" and (not bounds[0] <= start <= bounds[1]
+                                       or (parameter == "FROST_LOW_SNOW" and start not in temperatures))}
+        missing_periods.update(stale)
+        for day in _days(*bounds):
+            keys = snow.PARAMETERS if day in temperatures else snow.PARAMETERS[:2]
+            for parameter, stat in keys:
+                required = [("day", day, day), *snow.period_bounds(day)]
+                if any((kind, start, end, parameter, stat) not in snow_rows for kind, start, end in required):
+                    missing_periods.add(day)
+    elif snow_rows:
+        missing_periods.add(min(row[1] for row in snow_rows))
     return missing_days, missing_periods
 
 

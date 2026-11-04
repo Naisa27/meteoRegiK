@@ -206,7 +206,8 @@ def test_precipitation_rows_do_not_touch_temperature_rows(engine):
     with engine.connect() as conn:
         rows = conn.execute(
             select(computed_indicators.c.parameter, computed_indicators.c.stat_type)
-            .where(computed_indicators.c.period_type == "month")
+            .where(computed_indicators.c.period_type == "month",
+                   computed_indicators.c.parameter.in_(("T", "R")))
         ).all()
     assert sorted(rows) == [("R", "sum"), ("T", "avg"), ("T", "max"), ("T", "min")]
 

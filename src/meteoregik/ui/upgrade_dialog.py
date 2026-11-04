@@ -135,12 +135,9 @@ def run_upgrade(engine: Engine, db_path: Path, updates: list[str]) -> bool:
     try:
         dialog.status_label.setText("Сохраняем копию базы данных…")
         QApplication.processEvents()
-        try:
-            backup = backup_database(db_path)
-        except OSError:
-            # Копия — страховка, а не условие: нет места или прав на запись
-            # рядом с базой — обновляем без неё (база при сбое и так не меняется)
-            backup = None
+        # Пересчёт начинается только после успешного сохранения копии:
+        # при нехватке места или прав исходная база должна остаться прежней.
+        backup = backup_database(db_path)
 
         labels = {choice.wmo_index: choice.label for choice in load_directory_stations(engine)}
 

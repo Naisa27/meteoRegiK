@@ -15,6 +15,22 @@ AVG = ("T", "avg")
 MIN = ("T", "min")
 
 
+def test_snow_export_keeps_partial_note_and_separates_units(tmp_path):
+    path = tmp_path / "snow_aggregate.xlsx"
+    keys = [AVG, ("SNOW_DEPTH", "max"), ("S", "sum"), ("FROST_LOW_SNOW", "sum")]
+    grid = Grid(rows=(Row(cells=(Cell(3.0, note="Доступная часть периода"),)),), col_count=1)
+    data = ChartData(x_labels=["2020"], series={key: [3.0] for key in keys})
+    export_aggregate_view(out_path=path, station_title="Мосальск", primary="table",
+                          grid=grid, chart_data=data, parameters=keys)
+    workbook = openpyxl.load_workbook(path)
+    cell = workbook["Данные"]["A2"]
+    assert cell.value == 3.0
+    assert cell.comment.text == "Доступная часть периода"
+    assert "*" not in cell.number_format
+    assert len(workbook.chartsheets) == 3
+    workbook.close()
+
+
 def _sample_grid() -> Grid:
     return Grid(
         rows=(

@@ -104,6 +104,7 @@ def test_set_data_updates_db_and_triggers_recompute(tmp_path):
             select(computed_indicators.c.value).where(
                 computed_indicators.c.wmo_index == WMO_INDEX,
                 computed_indicators.c.period_type == "day",
+                computed_indicators.c.parameter == "T",
                 computed_indicators.c.stat_type == "max",
             )
         ).scalar_one()

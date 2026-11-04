@@ -59,6 +59,17 @@ def test_aggregate_view_button_opens_aggregate_view_dialog():
     mock_dialog_cls.return_value.exec.assert_called_once()
 
 
+def test_snow_button_opens_window_modally_for_owner():
+    _qapp()
+    engine = get_engine(":memory:")
+    window = MainWindow(engine)
+    with patch("meteoregik.ui.main_window.SnowDialog") as dialog, patch("meteoregik.ui.main_window.exec_window_modal") as show:
+        next(button for button in window.centralWidget().findChildren(QPushButton)
+             if button.text() == "Снежный покров").click()
+    dialog.assert_called_once_with(engine, window)
+    show.assert_called_once_with(dialog.return_value)
+
+
 def test_center_on_screen_places_window_in_the_middle_of_available_area():
     _qapp()
     window = MainWindow(get_engine(":memory:"))

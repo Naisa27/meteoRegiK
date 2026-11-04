@@ -69,11 +69,11 @@ from meteoregik.reports.chart_data import (
     chart_data_from_yearly,
 )
 from meteoregik.reports.grid import Grid, build_detailed_grid, build_monthly_grid, build_yearly_grid
-from meteoregik.reports.parameters import PARAMETER_LABELS, ParamKey
+from meteoregik.reports.parameters import DEFAULT_PARAMETERS, PARAMETER_LABELS, ParamKey, SNOW_ASSUMPTION, SNOW_PARAMETERS
 from meteoregik.stations.choices import load_stations_with_computed_indicators
 from meteoregik.ui import theme
 from meteoregik.ui.aggregate_chart_view import AggregateChartView
-from meteoregik.ui.aggregate_table_view import show_grid
+from meteoregik.ui.aggregate_table_view import StickyAggregateTable
 from meteoregik.ui.background import run_in_background
 from meteoregik.ui.buttons import reserve_focus_width
 from meteoregik.ui.date_field import DateField, DateFieldError
@@ -265,7 +265,7 @@ class AggregateViewDialog(QDialog):
         self._run_async = run_async
         self._request_id = 0
         self._preferences = preferences or Preferences.next_to_database(engine.url.database)
-        self._selected_parameter_keys: set[ParamKey] = set(PARAMETER_LABELS)
+        self._selected_parameter_keys: set[ParamKey] = set(DEFAULT_PARAMETERS)
         self.setWindowTitle("Просмотр агрегатных данных")
         # Тот же размер, что у главного окна на момент открытия (2026-09-23,
         # по замечанию пользователя — модалка была тесновата под "Подробно"
@@ -311,9 +311,16 @@ class AggregateViewDialog(QDialog):
         result_row.addWidget(self.export_btn)
         layout.addLayout(result_row)
 
+        self.snow_note = QLabel(SNOW_ASSUMPTION)
+        self.snow_note.setWordWrap(True)
+        self.snow_note.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
+        self.snow_note.hide()
+        layout.addWidget(self.snow_note)
+
         self._stack = QStackedWidget()
-        self.table = QTableView()
-        self._stack.addWidget(self.table)
+        self.table_area = StickyAggregateTable()
+        self.table = self.table_area.table
+        self._stack.addWidget(self.table_area)
         self.chart_view = AggregateChartView()
         self._stack.addWidget(self.chart_view)
         # Показывается вместо пустой таблицы, пока в базе нет данных (см.
@@ -635,10 +642,11 @@ class AggregateViewDialog(QDialog):
         self._last_view_kind = view_kind
         self._last_station_title = applied.station_title
         self._last_output_mode = output_mode
+        self.snow_note.setVisible(any(key[0] in SNOW_PARAMETERS for key in parameters))
 
         if view_kind == "table":
-            show_grid(self.table, grid)
-            self._stack.setCurrentWidget(self.table)
+            self.table_area.set_grid(grid)
+            self._stack.setCurrentWidget(self.table_area)
         else:
             self.chart_view.plot(chart_data, parameters)
             self._stack.setCurrentWidget(self.chart_view)

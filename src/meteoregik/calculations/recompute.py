@@ -37,7 +37,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
 from meteoregik.calculations.anomalies import mark_stale
-from meteoregik.calculations import precipitation, transitions
+from meteoregik.calculations import precipitation, snow, transitions
 from meteoregik.calculations.pending import begin_recomputation, finish_recomputation
 from meteoregik.calculations.temperature import Stats, daily_stats, decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, rp5_readings
@@ -380,4 +380,5 @@ def recompute_range(
                 engine, wmo_index, parameter, period_type, period_start, period_end, stats, None, resolve
             )
     with engine.begin() as conn:
+        snow.rebuild_station(conn, wmo_index)
         finish_recomputation(conn, wmo_index, snapshot)

@@ -39,7 +39,7 @@ from meteoregik.reports.parameters import DEFAULT_DECIMALS, ParamKey, decimals_f
 
 Align = Literal["left", "center", "right"]
 Side = Literal["top", "bottom", "left", "right"]
-Fill = Literal["decade", "total"]
+Fill = Literal["decade", "total", "snow"]
 TextColor = Literal["accent"]
 
 _MONTH_NAMES_RU = [
@@ -78,6 +78,7 @@ class Cell:
     in_table: bool = False
     # Стороны, по которым идёт жирный ("более чёрный") контур.
     thick: frozenset[Side] = frozenset()
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class Row:
 class Grid:
     rows: tuple[Row, ...]
     col_count: int
+    sticky_sections: tuple[tuple[int, tuple[Row, ...]], ...] = ()
 
 
 def _pad(cells: list[Cell], col_count: int) -> tuple[Cell, ...]:
@@ -102,7 +104,11 @@ def _blank_row(col_count: int) -> Row:
 
 
 def _value_cell(stats: Stats, key: ParamKey) -> Cell:
-    return Cell(value=stats.get(key), decimals=decimals_for(key))
+    value = stats.get(key)
+    frost = key == ("FROST_LOW_SNOW", "sum") and value is not None and value > 0
+    return Cell(value=stats.get(key), decimals=decimals_for(key),
+                note=getattr(stats, "notes", {}).get(key, ""),
+                fill="snow" if frost else None, bold=frost)
 
 
 def _table_rows(
@@ -139,7 +145,7 @@ def _table_rows(
                     cell,
                     in_table=True,
                     thick=frozenset(sides),
-                    fill=fills.get(col_index, cell.fill),
+                    fill=cell.fill or fills.get(col_index),
                 )
             )
         rows.append(Row(_pad(styled, col_count)))
@@ -187,7 +193,11 @@ def _day_value_cells(year: int, month: int, month_slice: MonthSlice, key: ParamK
     for decade in (1, 2, 3):
         start, end = _DECADE_DAY_RANGES[decade]
         for day in range(start, end + 1):
-            cells.append(_value_cell(month_slice.day_values.get(day, {}), key) if day <= last_day else Cell())
+            cell = _value_cell(month_slice.day_values.get(day, {}), key) if day <= last_day else Cell()
+            if key == ("S", "sum") and cell.value is not None:
+                cell = replace(cell, value="есть" if cell.value else "нет", align="center",
+                               fill="snow" if cell.value else None)
+            cells.append(cell)
         cells.append(_value_cell(month_slice.decade_values.get(decade, {}), key))
     cells.append(_value_cell(month_slice.month_values, key))
     return cells
@@ -208,11 +218,14 @@ def build_detailed_grid(years: list[YearSlice], parameters: list[ParamKey]) -> G
 
     col_count = DETAILED_COL_COUNT
     rows: list[Row] = []
+    sections: list[tuple[int, tuple[Row, ...]]] = []
     for year_index, year_slice in enumerate(years):
         if year_index:
             rows.append(_blank_row(col_count))  # годы разделены сильнее, чем месяцы
+        section_start = len(rows)
         rows.append(_title_row(f"{year_slice.year} год", col_count))
         rows += _pairs_table([(label_for(key), _value_cell(year_slice.year_values, key)) for key in parameters], col_count)
+        sections.append((section_start, tuple(rows[section_start:])))
         rows.append(_blank_row(col_count))  # пустая строка под среднегодовыми (п.3)
 
         for month in sorted(year_slice.months):
@@ -225,7 +238,7 @@ def build_detailed_grid(years: list[YearSlice], parameters: list[ParamKey]) -> G
             rows += _table_rows(header, body, col_count, fills=_DETAILED_FILLS, outlined_columns=DECADE_COLUMNS)
             rows.append(_blank_row(col_count))  # пустая строка между таблицами месяцев
 
-    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count)
+    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count, sticky_sections=tuple(sections))
 
 
 def _build_detailed_single(years: list[YearSlice], key: ParamKey) -> Grid:
@@ -240,11 +253,14 @@ def _build_detailed_single(years: list[YearSlice], key: ParamKey) -> Grid:
     бы месяцы и искажали картину при сравнении лет."""
     col_count = DETAILED_COL_COUNT
     rows: list[Row] = []
+    sections: list[tuple[int, tuple[Row, ...]]] = []
     for year_index, year_slice in enumerate(years):
         if year_index:
             rows.append(_blank_row(col_count))
+        section_start = len(rows)
         rows.append(_title_row(f"{year_slice.year} год", col_count))
         rows += _pairs_table([(label_for(key), _value_cell(year_slice.year_values, key))], col_count)
+        sections.append((section_start, tuple(rows[section_start:])))
         rows.append(_blank_row(col_count))
 
         header = [Cell(), *_day_header_cells(year_slice.year, 1, "за месяц")]
@@ -258,7 +274,7 @@ def _build_detailed_single(years: list[YearSlice], key: ParamKey) -> Grid:
         rows += _table_rows(header, body, col_count, fills=_DETAILED_FILLS, outlined_columns=DECADE_COLUMNS)
         rows.append(_blank_row(col_count))
 
-    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count)
+    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count, sticky_sections=tuple(sections))
 
 
 def _month_header_cells() -> list[Cell]:
@@ -291,7 +307,12 @@ def build_monthly_grid(
 
     col_count = MONTHLY_COL_COUNT
     rows: list[Row] = []
+    sections: list[tuple[int, tuple[Row, ...]]] = []
     for year_slice in years:
+        sections.append((len(rows), tuple([
+            _title_row(f"{year_slice.year} год", 2),
+            *_pairs_table([(label_for(key), _value_cell(year_slice.year_values, key)) for key in parameters], 2),
+        ])))
         rows.append(_title_row(f"{year_slice.year} год", col_count))
         header = [
             Cell("показатель", align="left", bold=True),
@@ -304,7 +325,7 @@ def build_monthly_grid(
         )
         rows.append(_blank_row(col_count))  # пустая строка между таблицами лет (п.4)
 
-    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count)
+    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count, sticky_sections=tuple(sections))
 
 
 def _build_monthly_single(years: list[YearSlice], key: ParamKey, year_range: list[int] | None) -> Grid:
@@ -328,7 +349,9 @@ def _build_monthly_single(years: list[YearSlice], key: ParamKey, year_range: lis
         rows += _table_rows(
             header, body, col_count, fills=_MONTHLY_FILLS, outlined_columns=(MONTHLY_TOTAL_COLUMN,)
         )
-    return Grid(rows=_strip_trailing_blank(rows), col_count=col_count)
+    final_rows = _strip_trailing_blank(rows)
+    return Grid(rows=final_rows, col_count=col_count,
+                sticky_sections=((0, final_rows[:3]),) if years else ())
 
 
 def build_yearly_grid(year_values: dict[int, Stats], years: list[int], parameters: list[ParamKey]) -> Grid:
@@ -342,4 +365,5 @@ def build_yearly_grid(year_values: dict[int, Stats], years: list[int], parameter
         [Cell(label_for(key), align="left"), *(_value_cell(year_values.get(year, {}), key) for year in years)]
         for key in parameters
     ]
-    return Grid(rows=tuple(_table_rows(header, body, col_count)), col_count=col_count)
+    rows = tuple(_table_rows(header, body, col_count))
+    return Grid(rows=rows, col_count=col_count, sticky_sections=((0, rows[:1]),) if rows else ())

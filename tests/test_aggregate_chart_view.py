@@ -116,3 +116,17 @@ def test_x_axis_shows_period_labels():
     view.plot(_chart_data_with_rain(), [AVG, RAIN])
 
     assert [label.get_text() for label in view._ax.get_xticklabels()] == ["01.2020", "02.2020", "03.2020"]
+
+
+def test_snow_counts_height_and_temperature_have_separate_scales():
+    _qapp()
+    keys = [AVG, RAIN, ("S", "sum"), ("FROST_LOW_SNOW", "sum"), ("SNOW_DEPTH", "max")]
+    data = ChartData(x_labels=["01.2020"], series={key: [1.0] for key in keys})
+    view = AggregateChartView()
+    view.plot(data, keys)
+    assert len(view._figure.axes) == 4
+    counts = next(axis for axis in view._figure.axes if len(axis.patches) == 2)
+    assert counts.patches[0].get_x() != counts.patches[1].get_x()
+    assert len({_color_for(key) for key in keys}) == len(keys)
+    view.plot(data, [AVG])
+    assert len(view._figure.axes) == 1

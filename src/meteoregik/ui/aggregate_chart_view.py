@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from meteoregik.reports.chart_data import ChartData
 from meteoregik.reports.parameters import (
-    DEFAULT_PARAMETERS,
+    PARAMETER_LABELS,
     ParamKey,
     decimals_for,
     is_bar,
@@ -47,7 +47,7 @@ _BAR_WIDTH = 0.8
 
 def _color_for(key: ParamKey) -> str:
     try:
-        index = DEFAULT_PARAMETERS.index(key)
+        index = list(PARAMETER_LABELS).index(key)
     except ValueError:
         index = 0
     return _SERIES_COLORS[index % len(_SERIES_COLORS)]
@@ -66,6 +66,7 @@ class AggregateChartView(QWidget):
         self._cursor: mplcursors.Cursor | None = None
         self._x_labels: list[str] = []
         self._decimals: dict[str, int] = {}
+        self._notes: dict[str, list[str]] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -81,6 +82,11 @@ class AggregateChartView(QWidget):
         self._bar_ax = None
         self._x_labels = chart_data.x_labels
         self._decimals = {label_for(key): decimals_for(key) for key in parameters}
+        self._notes = {label_for(key): chart_data.notes.get(key, []) for key in parameters}
+
+        if any(key[0] in {"S", "SNOW_DEPTH", "FROST_LOW_SNOW"} for key in parameters):
+            self._plot_snow_quantities(chart_data, parameters)
+            return
 
         line_keys = [key for key in parameters if not is_bar(key)]
         bar_keys = [key for key in parameters if is_bar(key)]
@@ -126,6 +132,45 @@ class AggregateChartView(QWidget):
             self._cursor.connect("add", self._annotate)
         self._canvas.draw_idle()
 
+    def _plot_snow_quantities(self, data: ChartData, parameters: list[ParamKey]) -> None:
+        """Разные единицы получают свои шкалы; счётчики не перекрывают друг друга."""
+        groups: dict[str, list[ParamKey]] = {}
+        for key in parameters:
+            title = "Число дней" if key[0] in {"S", "FROST_LOW_SNOW"} else quantity_title([key])
+            groups.setdefault(title, []).append(key)
+        self._figure.clear()
+        artists = []
+        positions = list(range(len(data.x_labels)))
+        for row, (title, keys) in enumerate(groups.items(), 1):
+            ax = self._figure.add_subplot(len(groups), 1, row)
+            if row == 1:
+                self._ax = ax
+            bars = [key for key in keys if is_bar(key)]
+            for key in keys:
+                values = data.series.get(key, [])
+                if is_bar(key):
+                    width = _BAR_WIDTH / len(bars)
+                    shift = (bars.index(key) - (len(bars) - 1) / 2) * width
+                    artist = ax.bar(
+                        [x + shift for x in positions],
+                        [float("nan") if value is None else value for value in values],
+                        width=width, color=_color_for(key), label=label_for(key), alpha=_BAR_ALPHA,
+                    )
+                else:
+                    artist, = ax.plot(positions, values, color=_color_for(key), label=label_for(key))
+                artists.append(artist)
+            self._style_axis(ax, title)
+            ax.legend(loc="upper left", frameon=False, ncol=len(keys))
+            step = max(1, -(-len(positions) // _MAX_X_TICKS))
+            ticks = positions[::step]
+            ax.set_xticks(ticks)
+            ax.set_xticklabels([data.x_labels[i] for i in ticks], rotation=45, ha="right")
+        self._figure.tight_layout()
+        if artists:
+            self._cursor = mplcursors.cursor(artists, hover=True)
+            self._cursor.connect("add", self._annotate)
+        self._canvas.draw_idle()
+
     def _style_axis(self, ax: Axes, title: str, grid: bool = True) -> None:
         ax.set_facecolor(theme.BG)
         if grid:
@@ -151,4 +196,9 @@ class AggregateChartView(QWidget):
         index = round(x_pos)
         x_label = self._x_labels[index] if 0 <= index < len(self._x_labels) else str(x_pos)
         decimals = self._decimals.get(label, 2)
-        sel.annotation.set_text(f"{label}\n{x_label}: {y:.{decimals}f}")  # type: ignore[attr-defined]
+        notes = self._notes.get(label, [])
+        note = notes[index] if 0 <= index < len(notes) else ""
+        text = f"{label}\n{x_label}: {y:.{decimals}f}"
+        if note:
+            text += "\n" + note
+        sel.annotation.set_text(text)  # type: ignore[attr-defined]

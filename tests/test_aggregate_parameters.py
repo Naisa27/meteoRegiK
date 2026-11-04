@@ -3,8 +3,9 @@ from __future__ import annotations
 from meteoregik.reports.parameters import DEFAULT_PARAMETERS, PARAMETER_LABELS, label_for
 
 
-def test_default_parameters_match_registry_order() -> None:
-    assert DEFAULT_PARAMETERS == list(PARAMETER_LABELS)
+def test_default_parameters_keep_temperature_and_precipitation() -> None:
+    assert DEFAULT_PARAMETERS == [("T", "avg"), ("T", "min"), ("T", "max"), ("R", "sum")]
+    assert set(DEFAULT_PARAMETERS).issubset(PARAMETER_LABELS)
 
 
 def test_label_for_known_parameter() -> None:

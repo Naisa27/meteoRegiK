@@ -74,6 +74,7 @@ class GreetingWidget(QWidget):
     aggregate_view_requested = Signal()
     anomaly_calc_requested = Signal()
     transitions_requested = Signal()
+    snow_requested = Signal()
     dashboard_requested = Signal()
     map_requested = Signal()
     station_directory_requested = Signal()
@@ -207,6 +208,7 @@ class GreetingWidget(QWidget):
             [
                 ("Отклонения от нормы", self.anomaly_calc_requested),
                 ("Переходы температуры", self.transitions_requested),
+                ("Снежный покров", self.snow_requested),
             ],
             theme.CALC_ROW_COLORS,
         )

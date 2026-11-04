@@ -38,7 +38,7 @@ def test_greeting_widget_emits_data_browser_requested_on_button_click():
     buttons = widget.findChildren(QPushButton)
     # "Путеводитель по приложению", три кнопки "Работы с данными", "Отклонения
     # от нормы", "Переходы температуры", "Справочники", "Дашборд" и "Карта"
-    assert len(buttons) == 10
+    assert len(buttons) == 11
     data_browser_btn = next(b for b in buttons if b.text() == "Просмотр исходных данных")
     data_browser_btn.click()
 
@@ -111,3 +111,12 @@ def test_greeting_widget_anomaly_calc_button_emits_signal():
     next(b for b in widget.findChildren(QPushButton) if b.text() == "Отклонения от нормы").click()
 
     assert emitted["n"] == 1
+
+
+def test_greeting_widget_snow_button_emits_signal():
+    _qapp()
+    widget = GreetingWidget()
+    emitted = []
+    widget.snow_requested.connect(lambda: emitted.append(True))
+    next(b for b in widget.findChildren(QPushButton) if b.text() == "Снежный покров").click()
+    assert emitted == [True]

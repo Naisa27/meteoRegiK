@@ -87,7 +87,7 @@ def test_dialog_lists_stations_with_their_state(engine):
     dialog = AnomalyCalcDialog(engine)
 
     rows = {row[0]: row for row in _texts(dialog.table)}
-    assert rows["Мосальск (27704)"][1:] == ["01.01.2020–31.12.2020", "требуется расчёт", "—", "—"]
+    assert rows["Мосальск (27704)"][1:] == ["01.01.2020–31.12.2020", "требуется расчёт", "—", "—", "—"]
     assert rows["Сухиничи (27707)"][2].startswith("рассчитано ")
     assert rows["Сухиничи (27707)"][3] == "по архиву 2020–2020 (1 год)"
     assert rows["Сухиничи (27707)"][4] == "нет данных об осадках"  # в базе только температура
@@ -150,8 +150,9 @@ def test_dialog_names_both_parameters_and_groups_their_norm_columns(engine):
     from meteoregik.ui.anomaly_calc_dialog import COLUMNS, GROUP_NORM, _INTRO, precipitation_norm_text
 
     assert "температуры и осадков" in _INTRO
-    assert [(column.title, column.group) for column in COLUMNS[-2:]] == [
+    assert [(column.title, column.group) for column in COLUMNS[-3:]] == [
         ("Температура", GROUP_NORM), ("Осадки", GROUP_NORM),
+        ("Дни со снежным покровом", GROUP_NORM),
     ]
     moment = datetime(2026, 10, 12, 9, 0)
     with_rain = CalcStatus(1, PERIOD, moment, True, 1991, 2020, 30, NormBase(False, 2006, 2024, 9))

@@ -30,7 +30,7 @@ from meteoregik.ui.dashboard_precip_charts import (
     season_tooltip,
 )
 from meteoregik.ui.dashboard_precip_tab import annual_note, annual_title, card_texts
-from meteoregik.ui.dashboard_view import TAB_PRECIPITATION, TAB_SOURCE, TAB_TEMPERATURE, DashboardDialog
+from meteoregik.ui.dashboard_view import TAB_PRECIPITATION, TAB_SNOW, TAB_SOURCE, TAB_TEMPERATURE, DashboardDialog
 
 STATION = 27707
 
@@ -363,15 +363,17 @@ def _add_indicators(engine, parameter: str, stat_type: str, values: StationValue
         conn.execute(computed_indicators.insert(), rows)
 
 
-def test_dashboard_has_three_tabs_with_filter_shared_by_the_first_two(engine, three_years):
+def test_dashboard_has_four_tabs_with_shared_filter(engine, three_years):
     _qapp()
     dialog = DashboardDialog(engine, run_async=False)
     dialog.show()
 
     assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == [
-        TAB_TEMPERATURE, TAB_PRECIPITATION, TAB_SOURCE,
+        TAB_TEMPERATURE, TAB_PRECIPITATION, TAB_SNOW, TAB_SOURCE,
     ]
     dialog.tabs.setCurrentWidget(dialog.precipitation_tab)
+    assert dialog._filter_card.isVisible()
+    dialog.tabs.setCurrentWidget(dialog.snow_tab)
     assert dialog._filter_card.isVisible()
     dialog.tabs.setCurrentWidget(dialog.source_tab)
     assert not dialog._filter_card.isVisible()  # "Исходные данные" — по всей базе

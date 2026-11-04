@@ -143,7 +143,7 @@ def test_dialog_resizes_to_match_parent_window(tmp_path):
 
 def test_params_group_shows_default_selection_count(tmp_path):
     _, dialog = _dialog(tmp_path)
-    assert dialog.params_label.text() == "Выбрано: 4 из 4"
+    assert dialog.params_label.text() == "Выбрано: 4 из 7"
 
 
 # --- валидация фильтров ---
@@ -199,7 +199,7 @@ def test_apply_empty_period_uses_full_station_bounds_and_fills_table(tmp_path, m
     assert messages == []
     assert _rows(dialog) > 0
     assert dialog.export_btn.isEnabled()
-    assert dialog._stack.currentWidget() is dialog.table
+    assert dialog._stack.currentWidget() is dialog.table_area
 
 
 def test_apply_detailed_mode_places_day_and_decade_values(tmp_path):
@@ -302,7 +302,7 @@ def test_choose_parameters_updates_selection_and_label(tmp_path, monkeypatch):
     dialog.params_btn.click()
 
     assert dialog._selected_parameter_keys == {("T", "avg")}
-    assert dialog.params_label.text() == "Выбрано: 1 из 4"
+    assert dialog.params_label.text() == "Выбрано: 1 из 7"
 
 
 def test_choose_parameters_cancel_keeps_previous_selection(tmp_path, monkeypatch):
@@ -311,7 +311,7 @@ def test_choose_parameters_cancel_keeps_previous_selection(tmp_path, monkeypatch
 
     dialog.params_btn.click()
 
-    assert dialog.params_label.text() == "Выбрано: 4 из 4"
+    assert dialog.params_label.text() == "Выбрано: 4 из 7"
 
 
 # --- запоминание фильтров ---
@@ -331,7 +331,7 @@ def test_preferences_are_restored_on_reopen_except_station(tmp_path):
     # станция — требование 2026-09-23, п.7: НЕ запоминается, поле пустое
     assert reopened.station_combo.currentText() == ""
     assert reopened._selected_parameter_keys == {("T", "avg"), ("T", "max")}
-    assert reopened.params_label.text() == "Выбрано: 2 из 4"
+    assert reopened.params_label.text() == "Выбрано: 2 из 7"
     assert reopened.monthly_radio.isChecked()
     assert reopened.chart_radio.isChecked()
 
@@ -635,4 +635,4 @@ def test_database_with_data_opens_without_no_data_hint_and_shows_results(tmp_pat
     _select_station(dialog)
     dialog.apply_btn.click()
 
-    assert dialog._stack.currentWidget() is dialog.table
+    assert dialog._stack.currentWidget() is dialog.table_area

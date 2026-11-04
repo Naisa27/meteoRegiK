@@ -23,6 +23,7 @@ class ChartData:
     series: dict[ParamKey, list[float | None]] = field(default_factory=dict)
     # Подпись оси X — по гранулярности точек (день/месяц/год).
     x_title: str = "Период"
+    notes: dict[ParamKey, list[str]] = field(default_factory=dict)
 
 
 def _empty_series(parameters: list[ParamKey]) -> dict[ParamKey, list[float | None]]:
@@ -34,6 +35,7 @@ def chart_data_from_detailed(years: list[YearSlice], parameters: list[ParamKey])
     день (в порядке дат по возрастанию)."""
     x_labels: list[str] = []
     series = _empty_series(parameters)
+    notes = {key: [] for key in parameters}
     for year_slice in years:
         for month in sorted(year_slice.months):
             month_slice = year_slice.months[month]
@@ -42,7 +44,8 @@ def chart_data_from_detailed(years: list[YearSlice], parameters: list[ParamKey])
                 stats = month_slice.day_values[day]
                 for key in parameters:
                     series[key].append(stats.get(key))
-    return ChartData(x_labels=x_labels, series=series, x_title="Дата")
+                    notes[key].append(getattr(stats, "notes", {}).get(key, ""))
+    return ChartData(x_labels=x_labels, series=series, x_title="Дата", notes=notes)
 
 
 def chart_data_from_monthly(years: list[YearSlice], parameters: list[ParamKey]) -> ChartData:
@@ -50,21 +53,25 @@ def chart_data_from_monthly(years: list[YearSlice], parameters: list[ParamKey]) 
     месяц."""
     x_labels: list[str] = []
     series = _empty_series(parameters)
+    notes = {key: [] for key in parameters}
     for year_slice in years:
         for month in sorted(year_slice.months):
             x_labels.append(f"{month:02d}.{year_slice.year}")
             stats = year_slice.months[month].month_values
             for key in parameters:
                 series[key].append(stats.get(key))
-    return ChartData(x_labels=x_labels, series=series, x_title="Месяц")
+                notes[key].append(getattr(stats, "notes", {}).get(key, ""))
+    return ChartData(x_labels=x_labels, series=series, x_title="Месяц", notes=notes)
 
 
 def chart_data_from_yearly(year_values: dict[int, Stats], years: list[int], parameters: list[ParamKey]) -> ChartData:
     """Гранулярность — год: одна точка на каждый выбранный год."""
     x_labels = [str(year) for year in years]
     series = _empty_series(parameters)
+    notes = {key: [] for key in parameters}
     for year in years:
         stats = year_values.get(year, {})
         for key in parameters:
             series[key].append(stats.get(key))
-    return ChartData(x_labels=x_labels, series=series, x_title="Год")
+            notes[key].append(getattr(stats, "notes", {}).get(key, ""))
+    return ChartData(x_labels=x_labels, series=series, x_title="Год", notes=notes)

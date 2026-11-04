@@ -89,10 +89,11 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, literal, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
-from meteoregik.calculations import precipitation
+from meteoregik.calculations import precipitation, snow
 from meteoregik.db.schema import (
     anomaly_state,
     computed_indicators,
@@ -104,12 +105,13 @@ from meteoregik.db.schema import (
     rp5_readings,
     schema_version,
     station_norms,
+    snow_norm_bases,
     temperature_transitions,
     transition_seasons,
     transition_state,
 )
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 14
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
@@ -117,6 +119,7 @@ CURRENT_SCHEMA_VERSION = 11
 DATA_UPDATES: dict[int, str] = {
     7: "суммы осадков за сутки, декаду, месяц и год",
     8: "суммы осадков по сезонам (зима, весна, лето, осень)",
+    12: "дни со снегом, высота снега и сильные морозы при малоснежье",
 }
 BACKUP_SUFFIX = "_до_обновления"
 
@@ -200,6 +203,12 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_10(conn)
             if version < 11:
                 _migrate_to_11(conn)
+            if version < 12:
+                _migrate_to_12(conn, progress)
+            if version < 13:
+                _migrate_to_13(conn)
+            if version < 14:
+                snow_norm_bases.create(conn, checkfirst=True)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 
@@ -212,6 +221,19 @@ def _recreate_if_empty(conn: Connection, table, migration_label: str) -> None:
         )
     table.drop(conn, checkfirst=True)
     table.create(conn)
+
+
+def _migrate_to_13(conn: Connection) -> None:
+    """Убрать пересечение кодов снега с исходными данными ветра и облачности."""
+    table = computed_indicators
+    columns = [column for column in table.c if column.name != "id"]
+    # Если новый ключ уже существует, он актуальнее старого; повторов не создаём.
+    for old, new in (("F", "FROST_LOW_SNOW"), ("H", "SNOW_DEPTH")):
+        values = [literal(new) if column.name == "parameter" else column for column in columns]
+        conn.execute(sqlite_insert(table).from_select(
+            [column.name for column in columns], select(*values).where(table.c.parameter == old)
+        ).on_conflict_do_nothing())
+        conn.execute(table.delete().where(table.c.parameter == old))
 
 
 def _migrate_to_2(conn: Connection) -> None:
@@ -266,6 +288,15 @@ def _migrate_to_10(conn: Connection) -> None:
 def _migrate_to_11(conn: Connection) -> None:
     """Очередь не меняет наблюдения и не запускает пересчёт при обновлении."""
     pending_recomputations.create(conn, checkfirst=True)
+
+
+def _migrate_to_12(conn: Connection, progress: StationProgress | None = None) -> None:
+    """Снег досчитывается без изменения сохранённых температурных решений."""
+    indexes = list(conn.execute(select(rp5_readings.c.wmo_index).distinct()).scalars())
+    for number, wmo in enumerate(indexes, 1):
+        if progress is not None:
+            progress(number, len(indexes), wmo)
+        snow.rebuild_station(conn, wmo)
 
 
 def _migrate_to_7(conn: Connection, progress: StationProgress | None = None) -> None:

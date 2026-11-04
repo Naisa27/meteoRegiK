@@ -239,6 +239,19 @@ norm_bases = Table(
     Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
 )
 
+snow_norm_bases = Table(
+    "snow_norm_bases",
+    metadata,
+    Column("wmo_index", Integer, primary_key=True, autoincrement=False),
+    Column("period_type", Text, primary_key=True),
+    Column("month", Integer, primary_key=True),
+    Column("decade", Integer, primary_key=True),
+    Column("standard", Boolean, nullable=False),
+    Column("first_year", Integer, nullable=False),
+    Column("last_year", Integer, nullable=False),
+    Column("years", Integer, nullable=False),
+)
+
 # --- даты устойчивого перехода температуры (миграция 9, calculations/transitions.py) ---
 
 # Дата перехода средней суточной температуры через порог в сезон года.

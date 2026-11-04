@@ -21,7 +21,7 @@ from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate, QTableView
+from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from meteoregik.reports import table_palette
 from meteoregik.reports.grid import Align, Cell, Fill, Grid
@@ -47,6 +47,7 @@ _ALIGN_MAP: dict[Align, Qt.AlignmentFlag] = {
 _FILL_COLORS: dict[Fill, str] = {
     "decade": table_palette.DECADE_FILL,
     "total": table_palette.TOTAL_FILL,
+    "snow": table_palette.SNOW_FILL,
 }
 
 
@@ -136,6 +137,8 @@ class GridTableModel(QAbstractTableModel):
         cell = self._grid.rows[index.row()].cells[index.column()]
         if role == Qt.ItemDataRole.DisplayRole:
             return format_cell_value(cell.value, cell.decimals)
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return cell.note or None
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return _ALIGN_MAP[cell.align]
         if role == Qt.ItemDataRole.FontRole:
@@ -165,7 +168,8 @@ def _column_widths(view: QTableView, grid: Grid) -> list[int]:
             if cell.value is None:
                 continue
             metrics = bold if cell.bold else normal
-            width = metrics.horizontalAdvance(format_cell_value(cell.value, cell.decimals)) + 2 * CELL_PADDING + 8
+            text = format_cell_value(cell.value, cell.decimals)
+            width = metrics.horizontalAdvance(text) + 2 * CELL_PADDING + 8
             if width > widths[col]:
                 widths[col] = width
     return widths
@@ -195,3 +199,65 @@ def show_grid(view: QTableView, grid: Grid) -> None:
     header = view.horizontalHeader()
     for section, width in enumerate(_column_widths(view, grid)):
         header.resizeSection(section, width)
+
+
+class StickyAggregateTable(QWidget):
+    """Сводка года остаётся над прокручиваемыми подробностями этого года."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.summary = QTableView()
+        self.summary.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table = QTableView()
+        self.table.setVerticalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
+        layout.addWidget(self.summary)
+        layout.addWidget(self.table, 1)
+        self._grid = Grid((), 0)
+        self._section = -1
+        self.summary.hide()
+        self.table.verticalScrollBar().valueChanged.connect(self._update_summary)
+        self.summary.horizontalScrollBar().valueChanged.connect(self._sync_horizontal)
+        self.table.horizontalScrollBar().valueChanged.connect(self._sync_summary_horizontal)
+
+    def set_grid(self, grid: Grid) -> None:
+        self._grid = grid
+        self._section = -1
+        show_grid(self.table, grid)
+        self._update_summary()
+
+    def _update_summary(self, _value: int = 0) -> None:
+        if not self._grid.sticky_sections:
+            self.summary.hide()
+            return
+        top_row = max(0, self.table.rowAt(0))
+        section = 0
+        for number, (start, _) in enumerate(self._grid.sticky_sections):
+            if start > top_row:
+                break
+            section = number
+        if section == self._section:
+            return
+        self._section = section
+        _, rows = self._grid.sticky_sections[section]
+        width = max((i + 1 for row in rows for i, cell in enumerate(row.cells)
+                     if cell.value is not None or cell.in_table), default=2)
+        summary_grid = Grid(tuple(type(row)(row.cells[:width]) for row in rows), width)
+        show_grid(self.summary, summary_grid)
+        self.summary.setFixedHeight(sum(self.summary.rowHeight(i) for i in range(len(rows)))
+                                    + self.summary.horizontalScrollBar().sizeHint().height() + 4)
+        self.summary.show()
+        if width > 2:
+            for column in range(width):
+                self.summary.setColumnWidth(column, self.table.columnWidth(column))
+            self._sync_summary_horizontal(self.table.horizontalScrollBar().value())
+
+    def _sync_summary_horizontal(self, value: int) -> None:
+        if self.summary.model() is not None and self.summary.model().columnCount() > 2:
+            self.summary.horizontalScrollBar().setValue(value)
+
+    def _sync_horizontal(self, value: int) -> None:
+        if self.summary.model() is not None and self.summary.model().columnCount() > 2:
+            self.table.horizontalScrollBar().setValue(value)

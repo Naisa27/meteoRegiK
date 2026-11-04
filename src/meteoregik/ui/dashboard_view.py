@@ -71,6 +71,8 @@ from meteoregik.reports.dashboard_data import (
     station_day_bounds,
 )
 from meteoregik.reports.precipitation_data import PrecipitationData, build_precipitation
+from meteoregik.reports.snow_data import SnowData, build_snow
+from meteoregik.calculations.snow import archive_bounds as snow_archive_bounds
 from meteoregik.reports.precipitation_data import station_day_bounds as precipitation_day_bounds
 from meteoregik.resources import DASHBOARD_ICON_PATH
 from meteoregik.stations.choices import load_stations_with_computed_indicators
@@ -84,6 +86,7 @@ from meteoregik.ui.dashboard_charts import (
     TemperatureHeatmap,
 )
 from meteoregik.ui.dashboard_precip_tab import PrecipitationTab
+from meteoregik.ui.dashboard_snow_tab import SnowTab
 from meteoregik.ui.dashboard_source_tab import SourceDataTab
 from meteoregik.ui.dashboard_widgets import (
     HELP_QSS,
@@ -103,6 +106,7 @@ from meteoregik.ui.station_combo import StationCombo
 _TITLE = "Дашборд"
 TAB_TEMPERATURE = "Температурный режим"
 TAB_PRECIPITATION = "Осадки"
+TAB_SNOW = "Снежный покров"
 TAB_SOURCE = "Исходные данные"
 # Тёмно-синий текст переключателя теплокарты: 11.6:1 на белом
 HEATMAP_MODE_TEXT = "#1E3A6E"
@@ -481,7 +485,7 @@ def anomaly_note(data: DashboardData) -> str:
     return text
 
 
-_Loaded = tuple[DashboardData, PrecipitationData]
+_Loaded = tuple[DashboardData, PrecipitationData, SnowData]
 
 
 @dataclass(frozen=True)
@@ -551,6 +555,8 @@ class DashboardDialog(QDialog):
         self.tabs.addTab(self._build_temperature_tab(), TAB_TEMPERATURE)
         self.precipitation_tab = PrecipitationTab(_START_HINT, open_guide=self._open_guide)
         self.tabs.addTab(self.precipitation_tab, TAB_PRECIPITATION)
+        self.snow_tab = SnowTab()
+        self.tabs.addTab(self.snow_tab, TAB_SNOW)
         self.source_tab = SourceDataTab(self.engine, run_async=self._run_async)
         self.tabs.addTab(self.source_tab, TAB_SOURCE)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -792,6 +798,10 @@ class DashboardDialog(QDialog):
             b for b in (station_day_bounds(self.engine, wmo_index), precipitation_day_bounds(self.engine, wmo_index))
             if b is not None
         ]
+        with self.engine.connect() as conn:
+            snow_bounds = snow_archive_bounds(conn, wmo_index)
+        if snow_bounds is not None:
+            bounds.append(snow_bounds)
         if not bounds:
             return None
         return min(first for first, _ in bounds), max(last for _, last in bounds)
@@ -803,7 +813,11 @@ class DashboardDialog(QDialog):
 
         def task() -> _Loaded:
             period = (applied.wmo_index, applied.date_from, applied.date_to)
-            return build_dashboard(self.engine, *period), build_precipitation(self.engine, *period)
+            return (
+                build_dashboard(self.engine, *period),
+                build_precipitation(self.engine, *period),
+                build_snow(self.engine, *period),
+            )
 
         def on_done(loaded: _Loaded) -> None:
             if request_id != self._request_id:
@@ -839,13 +853,20 @@ class DashboardDialog(QDialog):
     def _set_loading(self, loading: bool) -> None:
         self.loading_overlay.setVisible(loading)
         self.precipitation_tab.set_loading(loading)
+        self.snow_tab.set_loading(loading)
         self.apply_btn.setEnabled(not loading)
         if loading:
             self.loading_overlay.raise_()
 
-    def _show(self, applied: _AppliedFilter, data: DashboardData, rain: PrecipitationData) -> None:
+    def _show(self, applied: _AppliedFilter, data: DashboardData, rain: PrecipitationData, snow: SnowData) -> None:
         period = f"{_format_day(applied.date_from)}–{_format_day(applied.date_to)}"
         title = f"{applied.station_title} — {period}"
+        if snow.has_data:
+            self.snow_tab.show_data(title, snow)
+        else:
+            self.snow_tab.clear_results(
+                f"{applied.station_title}: за период {period} данных rp5 о снеге не найдено."
+            )
         # У станции может быть температура без осадков и наоборот: пустая
         # вкладка объясняет это сама, окно-сообщение — только если пусты обе.
         if rain.has_data:
@@ -856,7 +877,7 @@ class DashboardDialog(QDialog):
             )
         if not data.has_data:
             self._clear_temperature(f"{applied.station_title}: за период {period} данных не найдено.")
-            if not rain.has_data:
+            if not rain.has_data and not snow.has_data:
                 QMessageBox.information(self, _TITLE, "За выбранный период данных не найдено.")
             return
         self._station_label.setText(title)
@@ -875,6 +896,7 @@ class DashboardDialog(QDialog):
         вводили бы в заблуждение. Вместо них — причина, почему пусто."""
         self._clear_temperature(message)
         self.precipitation_tab.clear_results(message)
+        self.snow_tab.clear_results(message)
 
     def _clear_temperature(self, message: str) -> None:
         self._station_label.setText("")

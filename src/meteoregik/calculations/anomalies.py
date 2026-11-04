@@ -56,7 +56,7 @@ from statistics import fmean
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.engine import Connection, Engine
 
-from meteoregik.calculations import precipitation
+from meteoregik.calculations import precipitation, snow_norms
 from meteoregik.calculations.temperature import decade_bounds
 from meteoregik.db.schema import (
     anomaly_state,
@@ -64,6 +64,7 @@ from meteoregik.db.schema import (
     norm_bases,
     period_completeness,
     station_norms,
+    snow_norm_bases,
 )
 
 PARAMETER = "T"
@@ -74,7 +75,7 @@ PERIOD_SEASON = precipitation.PERIOD_SEASON
 # считается устаревшим и пересчитывается.
 # 2 — добавлены осадки: нормы, отклонения и полнота второго параметра, сезоны.
 # 3 — полнота осадков по правилу "3/5", как у температуры (была "без пропусков").
-RULE_VERSION = 3
+RULE_VERSION = 4
 
 # Правило ВМО "3/5" для месячной средней (WMO-No. 1203): не больше 5
 # пропущенных дней всего и не больше 3 подряд.
@@ -388,7 +389,7 @@ def _has_day_value() -> object:
     return and_(
         computed_indicators.c.period_type == "day",
         computed_indicators.c.value.is_not(None),
-        or_(*(
+        or_(and_(computed_indicators.c.parameter == "S", computed_indicators.c.stat_type == "sum"), *(
             and_(computed_indicators.c.parameter == rules.parameter, computed_indicators.c.stat_type == rules.stat_type)
             for rules in ALL_RULES
         )),
@@ -414,6 +415,7 @@ def _purge(conn: Connection, wmo_index: int) -> None:
     """Убрать всё сохранённое расчётом по станции — по всем параметрам."""
     conn.execute(delete(anomaly_state).where(anomaly_state.c.wmo_index == wmo_index))
     conn.execute(delete(norm_bases).where(norm_bases.c.wmo_index == wmo_index))
+    conn.execute(delete(snow_norm_bases).where(snow_norm_bases.c.wmo_index == wmo_index))
     conn.execute(delete(station_norms).where(station_norms.c.wmo_index == wmo_index))
     conn.execute(delete(period_completeness).where(period_completeness.c.wmo_index == wmo_index))
     conn.execute(
@@ -520,7 +522,8 @@ def recalculate_station(engine: Engine, wmo_index: int) -> StationNorms | None:
 
     with engine.begin() as conn:
         _purge(conn, wmo_index)
-        if not computed:
+        has_snow = snow_norms.rebuild(conn, wmo_index)
+        if not computed and not has_snow:
             return None
         for parameter, (_, rows) in computed.items():
             key = {"wmo_index": wmo_index, "parameter": parameter}
@@ -566,6 +569,7 @@ class CalcStatus:
     norm_years: int = 0
     # База нормы осадков; None — суточных сумм осадков у станции нет
     precipitation: NormBase | None = None
+    snow: NormBase | None = None
 
     @property
     def stale(self) -> bool:
@@ -595,6 +599,7 @@ def calculation_status(engine: Engine) -> list[CalcStatus]:
         result.append(CalcStatus(
             wmo, period, state.calculated_at, temperature.standard, temperature.first_year,
             temperature.last_year, temperature.years, bases.get((wmo, PARAMETER_PRECIPITATION)),
+            bases.get((wmo, "S")),
         ))
     return result
 

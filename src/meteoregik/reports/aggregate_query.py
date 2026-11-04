@@ -14,16 +14,33 @@ period_start == period_end, так что для дней пересечение
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from bisect import bisect_left, bisect_right
 from datetime import date
 from typing import Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine, Row
 
-from meteoregik.db.schema import computed_indicators
+from meteoregik.db.schema import computed_indicators, rp5_readings
 from meteoregik.reports.parameters import ParamKey
 
-Stats = dict[ParamKey, float | None]
+class Stats(dict[ParamKey, float | None]):
+    """Числа и пояснения полноты, общие для экранной и Excel-раскладки."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.notes: dict[ParamKey, str] = {}
+
+
+@dataclass(frozen=True)
+class AggregateRow:
+    period_type: str
+    period_start: date
+    period_end: date
+    parameter: str
+    stat_type: str
+    value: float | None
+    note: str = ""
 
 PeriodType = str  # "day" | "decade" | "month" | "year"
 
@@ -37,7 +54,7 @@ class MonthSlice:
     """Данные одного месяца одного года: показатели самого месяца, трёх
     декад и отдельных дней (только реально встретившиеся в выборке)."""
 
-    month_values: Stats = field(default_factory=dict)
+    month_values: Stats = field(default_factory=Stats)
     decade_values: dict[int, Stats] = field(default_factory=dict)  # 1..3
     day_values: dict[int, Stats] = field(default_factory=dict)  # 1..31
 
@@ -48,7 +65,7 @@ class YearSlice:
     вложенные месяцы — только реально встретившиеся в выборке."""
 
     year: int
-    year_values: Stats = field(default_factory=dict)
+    year_values: Stats = field(default_factory=Stats)
     months: dict[int, MonthSlice] = field(default_factory=dict)
 
 
@@ -86,7 +103,7 @@ def fetch_rows(
     date_to: date,
     parameters: list[ParamKey],
     period_types: tuple[PeriodType, ...],
-) -> Sequence[Row]:
+) -> Sequence[AggregateRow]:
     """Плоская выборка computed_indicators по станции/периоду/показателям/
     уровням агрегации — вход для group_detailed/group_monthly/group_yearly."""
     params = {p for p, _ in parameters}
@@ -107,10 +124,66 @@ def fetch_rows(
         computed_indicators.c.period_end >= date_from,
     )
     with engine.connect() as conn:
-        return conn.execute(stmt).all()
+        rows = conn.execute(stmt).all()
+        if not params.intersection(("S", "SNOW_DEPTH", "FROST_LOW_SNOW")):
+            return [AggregateRow(*row) for row in rows]
+        first, last = conn.execute(
+            select(func.min(rp5_readings.c.obs_date), func.max(rp5_readings.c.obs_date))
+            .where(rp5_readings.c.wmo_index == wmo_index)
+        ).one()
+        temperature_days = sorted(conn.execute(
+            select(computed_indicators.c.period_start).where(
+                computed_indicators.c.wmo_index == wmo_index,
+                computed_indicators.c.period_type == "day",
+                computed_indicators.c.parameter == "T",
+                computed_indicators.c.stat_type == "avg",
+                computed_indicators.c.value.is_not(None),
+            )
+        ).scalars())
+        frost_days = sorted(conn.execute(
+            select(computed_indicators.c.period_start).where(
+                computed_indicators.c.wmo_index == wmo_index,
+                computed_indicators.c.period_type == "day",
+                computed_indicators.c.parameter == "FROST_LOW_SNOW",
+                computed_indicators.c.stat_type == "sum",
+                computed_indicators.c.value.is_not(None),
+            )
+        ).scalars())
+    result: list[AggregateRow] = []
+    for row in rows:
+        notes: list[str] = []
+        if row.parameter in ("S", "SNOW_DEPTH", "FROST_LOW_SNOW") and first is not None and last is not None:
+            available_start, available_end = max(first, row.period_start), min(last, row.period_end)
+            if available_start > row.period_start or available_end < row.period_end:
+                notes.append(f"Доступная часть периода: {available_start:%d.%m.%Y}–{available_end:%d.%m.%Y}.")
+            if row.parameter == "FROST_LOW_SNOW":
+                temperature_left = bisect_left(temperature_days, available_start)
+                temperature_right = bisect_right(temperature_days, available_end)
+                frost_left = bisect_left(frost_days, available_start)
+                frost_right = bisect_right(frost_days, available_end)
+                if (temperature_days[temperature_left:temperature_right]
+                        != frost_days[frost_left:frost_right]):
+                    raise RuntimeError(
+                        "Расчёт сильных морозов при малоснежье отсутствует или неполон. "
+                        "Повторно импортируйте файл этой станции для восстановления расчётов."
+                    )
+                count = frost_right - frost_left
+                expected = (available_end - available_start).days + 1
+                if count < expected:
+                    notes.append(f"Температура известна за {count} из {expected} дней; остальные дни не оценены.")
+        result.append(AggregateRow(*row, note=" ".join(notes)))
+    return result
 
 
-def group_detailed(rows: Sequence[Row]) -> list[YearSlice]:
+def _store(stats: Stats, row: AggregateRow | Row) -> None:
+    key = (row.parameter, row.stat_type)
+    stats[key] = row.value
+    note = getattr(row, "note", "")
+    if note:
+        stats.notes[key] = note
+
+
+def group_detailed(rows: Sequence[AggregateRow | Row]) -> list[YearSlice]:
     """Разбор для режима "Подробно" — годы со вложенными месяцами/декадами/
     днями, по возрастанию года."""
     years: dict[int, YearSlice] = {}
@@ -125,20 +198,20 @@ def group_detailed(rows: Sequence[Row]) -> list[YearSlice]:
     for row in rows:
         key: ParamKey = (row.parameter, row.stat_type)
         if row.period_type == "year":
-            year_slice(row.period_start.year).year_values[key] = row.value
+            _store(year_slice(row.period_start.year).year_values, row)
         elif row.period_type == "month":
-            month_slice(row.period_start.year, row.period_start.month).month_values[key] = row.value
+            _store(month_slice(row.period_start.year, row.period_start.month).month_values, row)
         elif row.period_type == "decade":
             month = month_slice(row.period_start.year, row.period_start.month)
-            month.decade_values.setdefault(_decade_of(row.period_start), {})[key] = row.value
+            _store(month.decade_values.setdefault(_decade_of(row.period_start), Stats()), row)
         elif row.period_type == "day":
             month = month_slice(row.period_start.year, row.period_start.month)
-            month.day_values.setdefault(row.period_start.day, {})[key] = row.value
+            _store(month.day_values.setdefault(row.period_start.day, Stats()), row)
 
     return [years[year] for year in sorted(years)]
 
 
-def group_monthly(rows: Sequence[Row]) -> list[YearSlice]:
+def group_monthly(rows: Sequence[AggregateRow | Row]) -> list[YearSlice]:
     """Разбор для режима "Помесячно" — годы с month_values по каждому
     месяцу, без decade/day (MonthSlice.decade_values/day_values остаются
     пустыми)."""
@@ -150,20 +223,20 @@ def group_monthly(rows: Sequence[Row]) -> list[YearSlice]:
     for row in rows:
         key: ParamKey = (row.parameter, row.stat_type)
         if row.period_type == "year":
-            year_slice(row.period_start.year).year_values[key] = row.value
+            _store(year_slice(row.period_start.year).year_values, row)
         elif row.period_type == "month":
             slice_ = year_slice(row.period_start.year)
             month = slice_.months.setdefault(row.period_start.month, MonthSlice())
-            month.month_values[key] = row.value
+            _store(month.month_values, row)
 
     return [years[year] for year in sorted(years)]
 
 
-def group_yearly(rows: Sequence[Row]) -> dict[int, Stats]:
+def group_yearly(rows: Sequence[AggregateRow | Row]) -> dict[int, Stats]:
     """Разбор для режима "По годам" — просто год -> показатели года."""
     result: dict[int, Stats] = {}
     for row in rows:
         if row.period_type != "year":
             continue
-        result.setdefault(row.period_start.year, {})[(row.parameter, row.stat_type)] = row.value
+        _store(result.setdefault(row.period_start.year, Stats()), row)
     return result

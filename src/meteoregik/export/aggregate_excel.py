@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Literal
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.data_source import AxDataSource, StrRef
 from openpyxl.chart.layout import Layout, ManualLayout
@@ -37,7 +38,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from meteoregik.reports import table_palette
 from meteoregik.reports.chart_data import ChartData
 from meteoregik.reports.grid import Cell, Fill, Grid
-from meteoregik.reports.parameters import ParamKey, decimals_for, is_bar, label_for, quantity_title
+from meteoregik.reports.parameters import ParamKey, decimals_for, is_bar, label_for, quantity_title, SNOW_ASSUMPTION, SNOW_PARAMETERS
 
 _TITLE_FONT = Font(bold=True, size=12)
 _HEADER_FONT = Font(bold=True)
@@ -48,6 +49,7 @@ _THICK_SIDE = Side(style="medium", color=table_palette.THICK_BORDER.lstrip("#"))
 _FILLS: dict[Fill, PatternFill] = {
     "decade": PatternFill("solid", fgColor=table_palette.DECADE_FILL.lstrip("#")),
     "total": PatternFill("solid", fgColor=table_palette.TOTAL_FILL.lstrip("#")),
+    "snow": PatternFill("solid", fgColor=table_palette.SNOW_FILL.lstrip("#")),
 }
 
 
@@ -61,6 +63,9 @@ def _write_title(ws: Worksheet, station_title: str, col_count: int) -> None:
     cell = ws.cell(row=1, column=1)
     cell.font = _TITLE_FONT
     cell.alignment = Alignment(horizontal="center")
+    if "\n" in station_title:
+        cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        ws.row_dimensions[1].height = 85
 
 
 def _cell_border(grid_cell: Cell) -> Border | None:
@@ -90,6 +95,8 @@ def _write_grid_sheet(ws: Worksheet, grid: Grid, station_title: str) -> None:
                 cell.border = border
             if isinstance(grid_cell.value, float):
                 cell.number_format = _number_format(grid_cell.decimals)
+            if grid_cell.note:
+                cell.comment = Comment(grid_cell.note, "meteoRegiK")
 
 
 def _write_flat_table(ws: Worksheet, chart_data: ChartData, parameters: list[ParamKey], station_title: str) -> int:
@@ -115,6 +122,9 @@ def _write_flat_table(ws: Worksheet, chart_data: ChartData, parameters: list[Par
             cell = ws.cell(row=row, column=2 + i, value=value)
             if isinstance(value, float):
                 cell.number_format = _number_format(decimals_for(key))
+            notes = chart_data.notes.get(key, [])
+            if offset < len(notes) and notes[offset]:
+                cell.comment = Comment(notes[offset], "meteoRegiK")
 
     return header_row
 
@@ -248,23 +258,43 @@ def export_aggregate_view(
     data_sheet_title, chart_sheet_title, chart_data_sheet_title = sheet_titles
     wb = Workbook()
     first_ws = wb.active
+    table_title = station_title
+    if any(key[0] in SNOW_PARAMETERS for key in parameters):
+        table_title += "\n" + SNOW_ASSUMPTION
 
     if primary == "table":
         if grid is None:
             raise ValueError("grid обязателен, когда primary == 'table'")
         first_ws.title = data_sheet_title
-        _write_grid_sheet(first_ws, grid, station_title)
+        _write_grid_sheet(first_ws, grid, table_title)
         chart_data_ws = wb.create_sheet(chart_data_sheet_title)
     else:
         chart_data_ws = first_ws
         chart_data_ws.title = chart_data_sheet_title
 
-    header_row = _write_flat_table(chart_data_ws, chart_data, parameters, station_title)
+    header_row = _write_flat_table(chart_data_ws, chart_data, parameters, table_title)
     # Лист-диаграмма без самой диаграммы Excel считает повреждённым — без
     # данных листа "График" просто нет.
     if chart_data.x_labels and parameters:
-        chart_ws = wb.create_chartsheet(chart_sheet_title, 1 if primary == "table" else 0)
-        chart_ws.add_chart(_build_chart(chart_data_ws, header_row, chart_data, parameters, station_title))
+        groups: dict[str, list[ParamKey]] = {}
+        if any(key[0] in {"S", "SNOW_DEPTH", "FROST_LOW_SNOW"} for key in parameters):
+            for key in parameters:
+                title = "Число дней" if key[0] in {"S", "FROST_LOW_SNOW"} else quantity_title([key])
+                groups.setdefault(title, []).append(key)
+        else:
+            groups[""] = parameters
+        for number, (quantity, keys) in enumerate(groups.items()):
+            title = chart_sheet_title if number == 0 else f"{chart_sheet_title} {number + 1}"
+            chart_ws = wb.create_chartsheet(title, number + (1 if primary == "table" else 0))
+            # Индексы рядов берутся по исходному списку parameters, поэтому
+            # для отдельной величины нужна своя компактная таблица-источник.
+            if len(groups) > 1:
+                group_ws = wb.create_sheet(f"График данные {number + 1}")
+                group_header = _write_flat_table(group_ws, chart_data, keys, table_title)
+            else:
+                group_ws, group_header = chart_data_ws, header_row
+            chart_ws.add_chart(_build_chart(group_ws, group_header, chart_data, keys,
+                                           f"{station_title} — {quantity}" if quantity else station_title))
         if primary == "chart":
             wb.active = 0
 
