@@ -96,6 +96,7 @@ def test_chart_exposes_whole_archive_and_wheel_propagates() -> None:
     chart.plot(periods)
     assert len(chart.periods) == 120
     assert chart.scrollbar.maximum() == 60
+    assert not chart.scroll_note.isHidden()
     chart.scrollbar.setValue(0)
     assert chart._ax.get_xlim()[0] < 0
     wheel = QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, 120),
@@ -103,7 +104,32 @@ def test_chart_exposes_whole_archive_and_wheel_propagates() -> None:
                         Qt.ScrollPhase.NoScrollPhase, False)
     assert chart.eventFilter(chart.canvas, wheel)
     assert not wheel.isAccepted()
+    chart.plot(periods[:2])
+    assert chart.scroll_row.isHidden() and chart.scroll_note.isHidden()
     chart.close()
+    assert app is not None
+
+
+def test_frost_seasons_and_season_norm_are_explained() -> None:
+    app = QApplication.instance() or QApplication([])
+    tab = SnowTab()
+    period = replace(_period(), start=date(2025, 7, 1), end=date(2026, 6, 30),
+                     frost_days=3, temperature_days=25)
+    cells = tuple(SnowHeatCell(date(2000 + i // 12, i % 12 + 1, 1),
+                              date(2000 + i // 12, i % 12 + 1, 28), 10, 12., -2., True,
+                              "1991–2020, 30 лет") for i in range(24))
+    tab.show_data("Станция", SnowData(period, seasons=(period,), heat_months=cells,
+                                      season_snow_norm=140.5,
+                                      season_snow_base="01: 1991–2020, 30 лет; 02: 1991–2020, 30 лет"))
+    assert "2025/26: 3 дн." in tab.cards[2].note.text()
+    assert "доступная часть" in tab.cards[2].note.text()
+    assert "140.5" in tab.comparison_note.text()
+    assert "сумма норм 12 месяцев" in tab.comparison_note.text()
+    assert "1991–2020" in tab.comparison_note.text()
+    tab.maximum_chart.plot_comparison((period,), (35.,), ("1991–2020",))
+    assert tab.maximum_chart.figure.legends
+    assert tab.maximum_chart._ax.get_legend() is None
+    tab.close()
     assert app is not None
 
 

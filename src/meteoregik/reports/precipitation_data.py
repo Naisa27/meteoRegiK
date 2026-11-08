@@ -272,6 +272,8 @@ def build_precipitation(engine: Engine, wmo_index: int, date_from: date, date_to
     """Нормы и полнота — сохранённые; если данные станции менялись после
     последнего расчёта, сначала досчитываются (как build_dashboard). Так же
     и даты переходов температуры — для сумм за периоды между ними."""
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    ensure_computed_fresh(engine, [wmo_index])
     ensure_fresh(engine, [wmo_index])
     values = fetch_station_values(engine, wmo_index, PRECIPITATION)
     with engine.connect() as conn:

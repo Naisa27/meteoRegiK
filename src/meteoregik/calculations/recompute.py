@@ -326,11 +326,16 @@ def recompute_range(
     with engine.begin() as conn:
         snapshot = begin_recomputation(conn, wmo_index, start, end, periods_only=periods_only)
         mark_stale(conn, wmo_index)
-        transitions.mark_stale(conn, wmo_index, start, end)
+        if any(item.parameters & 1 for item in snapshot):
+            transitions.mark_stale(conn, wmo_index, start, end)
         # Основной ряд сроков осадков — один на станцию и на весь пересчёт
         main_series = precipitation.main_series(conn, wmo_index)
     automatic_days = sorted(item.day for item in snapshot if item.auto_accept)
     raw_days = {item.day for item in snapshot if not item.periods_only}
+    masks = {item.day: item.parameters for item in snapshot}
+    active = 0
+    for item in snapshot:
+        active |= item.parameters
     missing_days = {item.day for item in snapshot if item.missing_only and not item.auto_accept}
 
     def resolve(conflict: ValueConflict) -> ConflictChoice:
@@ -353,6 +358,8 @@ def recompute_range(
                 (PARAMETER_TEMPERATURE, stats, source_file),
                 (precipitation.PARAMETER, {precipitation.STAT_SUM: day_sum}, sum_source),
             ):
+                if not masks.get(day, 7) & (1 if parameter == "T" else 2):
+                    continue
                 _resolve_and_store(engine, wmo_index, parameter, "day", day, day, values, source, resolve,
                                    missing_only=day in missing_days)
         if progress_callback is not None:
@@ -373,6 +380,8 @@ def recompute_range(
     ]
     for period_type, period_start, period_end in periods + seasons:
         for parameter, period_stats in _PERIOD_STATS.items():
+            if not active & (1 if parameter == "T" else 2):
+                continue
             if period_type == precipitation.PERIOD_SEASON and parameter != precipitation.PARAMETER:
                 continue  # сезонные значения есть только у осадков
             stats = period_stats(_stored_days(engine, wmo_index, parameter, period_start, period_end))

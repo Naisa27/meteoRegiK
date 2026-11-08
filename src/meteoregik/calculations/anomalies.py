@@ -626,6 +626,10 @@ def ensure_fresh(
     индексы. wmo_indexes ограничивает круг станций; None — все станции с
     данными, и тогда же убирается сохранённое по станциям без данных.
     progress(номер, всего, wmo_index) вызывается перед расчётом каждой."""
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    if wmo_indexes is not None:
+        wmo_indexes = list(wmo_indexes)
+    ensure_computed_fresh(engine, wmo_indexes)
     if wmo_indexes is not None:
         # Без обхода всей расчётной таблицы: для одной станции (дашборд)
         # достаточно посмотреть её строку состояния

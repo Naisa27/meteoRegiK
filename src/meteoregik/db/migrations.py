@@ -111,12 +111,13 @@ from meteoregik.db.schema import (
     transition_state,
 )
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 # Миграции, которые досчитывают показатели по уже залитым данным: номер
 # версии -> что считается (продолжение фразы "Идёт расчёт новых показателей:").
 # Текст видит пользователь в окне обновления.
 DATA_UPDATES: dict[int, str] = {
+    15: "восстановление снежных показателей после ручных исправлений",
     7: "суммы осадков за сутки, декаду, месяц и год",
     8: "суммы осадков по сезонам (зима, весна, лето, осень)",
     12: "дни со снегом, высота снега и сильные морозы при малоснежье",
@@ -209,6 +210,15 @@ def run_migrations(engine: Engine, progress: StationProgress | None = None) -> N
                 _migrate_to_13(conn)
             if version < 14:
                 snow_norm_bases.create(conn, checkfirst=True)
+            if version < 15:
+                columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(pending_recomputations)")}
+                if "parameters" not in columns:
+                    conn.exec_driver_sql("ALTER TABLE pending_recomputations ADD COLUMN parameters INTEGER NOT NULL DEFAULT 7")
+                if version >= 12:
+                    _migrate_to_12(conn, progress)
+                from meteoregik.calculations.anomalies import mark_stale
+                for wmo in conn.execute(select(rp5_readings.c.wmo_index).distinct()).scalars():
+                    mark_stale(conn, wmo)
             conn.execute(schema_version.update().values(version=CURRENT_SCHEMA_VERSION))
 
 

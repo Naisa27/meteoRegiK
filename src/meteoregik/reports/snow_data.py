@@ -6,6 +6,7 @@ from calendar import monthrange
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import date, timedelta
+from statistics import fmean
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
@@ -47,12 +48,30 @@ class SnowPeriod:
 
 
 @dataclass(frozen=True)
+class SnowMaximumMean:
+    value: float
+    first_year: int
+    last_year: int
+    count: int
+    standard: bool
+
+    @property
+    def base_text(self) -> str:
+        base = "1991–2020" if self.standard else f"архив {self.first_year}–{self.last_year}"
+        return f"{base}, полных периодов: {self.count}"
+
+
+@dataclass(frozen=True)
 class SnowData:
     total: SnowPeriod | None
     months: tuple[SnowPeriod, ...] = ()
     seasons: tuple[SnowPeriod, ...] = ()
     heat_months: tuple[SnowHeatCell, ...] = ()
     heat_decades: tuple[SnowHeatCell, ...] = ()
+    maximum_month_means: tuple[SnowMaximumMean | None, ...] = (None,) * 12
+    maximum_season_mean: SnowMaximumMean | None = None
+    season_snow_norm: float | None = None
+    season_snow_base: str = ""
 
     @property
     def has_data(self) -> bool:
@@ -100,6 +119,8 @@ def build_snow(engine: Engine, wmo_index: int, start: date, end: date) -> SnowDa
     Нули снега уже достроены расчётом. Отсутствие температуры отличаем от
     подтверждённого отсутствия морозов: число оценённых дней хранится явно.
     """
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    ensure_computed_fresh(engine, [wmo_index])
     bounds = station_day_bounds(engine, wmo_index)
     if bounds is None or start > end:
         return SnowData(None)
@@ -183,7 +204,56 @@ def build_snow(engine: Engine, wmo_index: int, start: date, end: date) -> SnowDa
                     for year in range(first_season, last_season + 1))
     anomalies.ensure_fresh(engine, [wmo_index])
     heat_months, heat_decades = _heat_cells(engine, wmo_index, first, last)
-    return SnowData(period(start, end), tuple(months), seasons, heat_months, heat_decades)
+    month_means, season_mean = maximum_means(engine, wmo_index, bounds)
+    with engine.connect() as conn:
+        season_norm = conn.execute(select(station_norms.c.value).where(
+            station_norms.c.wmo_index == wmo_index, station_norms.c.parameter == "S",
+            station_norms.c.period_type == "winter_season", station_norms.c.month == 7,
+            station_norms.c.decade == 0)).scalar_one_or_none()
+        bases = snow_norms.load_bases(conn, wmo_index)
+    base_text = "; ".join(f"{month:02d}: {bases['month', month, 0].text}"
+                          for month in range(1, 13) if ("month", month, 0) in bases)
+    return SnowData(period(start, end), tuple(months), seasons, heat_months, heat_decades,
+                    month_means, season_mean, season_norm, base_text)
+
+
+def maximum_means(
+    engine: Engine, wmo_index: int, bounds: tuple[date, date],
+) -> tuple[tuple[SnowMaximumMean | None, ...], SnowMaximumMean | None]:
+    """Средние максимумов полных месяцев и сезонов всего архива, вне фильтра экрана."""
+    first, last = bounds
+    table = computed_indicators
+    with engine.connect() as conn:
+        rows = conn.execute(select(table.c.period_start, table.c.value).where(
+            table.c.wmo_index == wmo_index, table.c.parameter == "SNOW_DEPTH",
+            table.c.stat_type == "max", table.c.period_type == "day",
+            table.c.period_start.between(first, last), table.c.value.is_not(None))).all()
+    if len(rows) != (last - first).days + 1:
+        raise RuntimeError("Расчёт высоты снега неполон во всём архиве станции.")
+    months: dict[tuple[int, int], float] = {}
+    seasons: dict[int, float] = {}
+    for day, value in rows:
+        key = day.year, day.month
+        months[key] = max(months.get(key, 0.0), value)
+        end_year = day.year + (day.month >= 7)
+        seasons[end_year] = max(seasons.get(end_year, 0.0), value)
+
+    def mean(samples: list[tuple[int, float]]) -> SnowMaximumMean | None:
+        standard = [(year, value) for year, value in samples if 1991 <= year <= 2020]
+        use_standard = len(standard) >= 24
+        selected = standard if use_standard else samples
+        if not selected:
+            return None
+        years, values = zip(*selected)
+        return SnowMaximumMean(fmean(values), min(years), max(years), len(selected), use_standard)
+
+    monthly = tuple(mean([(year, value) for (year, number), value in months.items()
+                          if number == month and first <= date(year, month, 1)
+                          and last >= date(year, month, monthrange(year, month)[1])])
+                    for month in range(1, 13))
+    seasonal = mean([(year, value) for year, value in seasons.items()
+                     if first <= date(year - 1, 7, 1) and last >= date(year, 6, 30)])
+    return monthly, seasonal
 
 
 def _heat_cells(

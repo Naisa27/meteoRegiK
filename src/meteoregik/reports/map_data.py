@@ -234,6 +234,8 @@ def _add_daily_maxima(engine: Engine, periods: _Periods) -> None:
 
 
 def fetch_map_data(engine: Engine, overview: SourceOverview | None = None) -> MapData:
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    ensure_computed_fresh(engine)
     ensure_fresh(engine)  # нормы и отклонения — по текущим данным
     stmt = (
         select(stations.c.wmo_index, stations.c.name, ru_regions.c.region, stations.c.lat, stations.c.lon)

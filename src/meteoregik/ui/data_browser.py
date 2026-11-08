@@ -30,6 +30,8 @@ wmo_index/station_name/source_file только для чтения: смена 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -56,7 +58,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 from sqlalchemy import Date, Float, Integer, Table, Time, delete, func, select
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, Connection
 from sqlalchemy.exc import IntegrityError
 
 from meteoregik.calculations.recompute import recompute_range
@@ -106,7 +108,7 @@ def _rp5_columns() -> list[tuple[str, str, bool]]:
 RP5_COLUMNS = _rp5_columns()
 # Столбцы, правка которых меняет расчётные показатели (температура и, с
 # 2026-10-11, осадки: количество и период, за который оно записано).
-RP5_TEMP_COLUMNS = {"T_temperature", "RRR_precipitation", "tR_precipitation_period"}
+RP5_TEMP_COLUMNS = {"T_temperature", "RRR_precipitation", "tR_precipitation_period", "sss_snow_depth"}
 # Всегда на экране, в фильтр полей не входят.
 RP5_FIXED_COLUMNS = ("wmo_index", "station_name", "obs_date", "obs_time")
 
@@ -384,6 +386,14 @@ class ReadingsTableModel(QAbstractTableModel):
             return False
 
         old_date = row.get("obs_date")
+        from meteoregik.calculations.pending import FIELD_DEPENDENCIES
+        mask = FIELD_DEPENDENCIES.get(col_name, 0)
+        affected = bool(mask)
+        old_series = None
+        if affected and self.table is rp5_readings and mask & 2:
+            from meteoregik.calculations.precipitation import main_series
+            with self.engine.connect() as conn:
+                old_series = main_series(conn, row["wmo_index"])
         try:
             with self.engine.begin() as conn:
                 conn.execute(
@@ -391,42 +401,99 @@ class ReadingsTableModel(QAbstractTableModel):
                     .where(self.table.c.id == row["id"])
                     .values(**{col_name: parsed, "updated_at": func.current_timestamp()})
                 )
-                if col_name in self.temp_columns or col_name in {"obs_date", "obs_time"}:
+                if affected:
                     dates = {old_date}
                     if col_name == "obs_date":
                         dates.add(parsed)
-                    mark_pending(conn, row["wmo_index"], [day for day in dates if day is not None])
+                    mark_pending(conn, row["wmo_index"], [day for day in dates if day is not None], parameters=mask)
+                    if self.table is rp5_readings and mask & 2:
+                        from meteoregik.calculations.precipitation import main_series
+                        if old_series != main_series(conn, row["wmo_index"]):
+                            archive_days = conn.execute(select(rp5_readings.c.obs_date).where(rp5_readings.c.wmo_index == row["wmo_index"]).distinct()).scalars().all()
+                            mark_pending(conn, row["wmo_index"], archive_days, parameters=2)
         except IntegrityError:
             return False
 
         row[col_name] = parsed
         self.dataChanged.emit(index, index)
 
-        if col_name in self.temp_columns or col_name == "obs_time":
-            recompute_range(self.engine, row["wmo_index"], row["obs_date"], row["obs_date"])
-        elif col_name == "obs_date" and old_date is not None and old_date != row["obs_date"]:
-            recompute_range(self.engine, row["wmo_index"], old_date, old_date)
-            recompute_range(self.engine, row["wmo_index"], row["obs_date"], row["obs_date"])
+        if affected:
+            self._run_recomputation(row["wmo_index"])
 
         return True
 
     # --- добавление/удаление ---
 
+    def _mark_series_change(self, conn: Connection, wmo_index: int, previous: int | None) -> None:
+        """Смена ряда осадков распространяет пересчёт на архив станции."""
+        from meteoregik.calculations.precipitation import main_series
+        if self.table is rp5_readings and previous != main_series(conn, wmo_index):
+            days = conn.execute(select(rp5_readings.c.obs_date).where(
+                rp5_readings.c.wmo_index == wmo_index).distinct()).scalars().all()
+            mark_pending(conn, wmo_index, days, parameters=2)
+
+    def _run_recomputation(self, wmo_index: int) -> None:
+        """Экран считает в фоне; отдельная модель работает синхронно."""
+        from meteoregik.calculations.freshness import ensure_computed_fresh
+        def calculate() -> None:
+            ensure_computed_fresh(self.engine, [wmo_index], recompute=recompute_range)
+        if getattr(self, "background_recompute", False):
+            from meteoregik.ui.background import run_in_background
+            owner = self.parent()
+            original_title = owner.windowTitle() if owner is not None else ""
+            if owner is not None:
+                owner.setWindowTitle(original_title + " — Идёт пересчёт…")
+                owner.setEnabled(False)
+            def done(result: object) -> None:
+                if owner is not None:
+                    owner.setWindowTitle(original_title)
+                    owner.setEnabled(True)
+            def failed(exc: BaseException) -> None:
+                done(None)
+                answer = QMessageBox.warning(
+                    owner, "Пересчёт",
+                    "Исходные данные сохранены, расчёт не завершён.\n" + str(exc),
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
+                    QMessageBox.StandardButton.Retry,
+                )
+                if answer == QMessageBox.StandardButton.Retry:
+                    self._run_recomputation(wmo_index)
+            run_in_background(self, calculate, done, failed)
+        else:
+            calculate()
+
     def insert_row(self, values: dict) -> None:
         with self.engine.begin() as conn:
+            from meteoregik.calculations.precipitation import main_series
+            old_series = main_series(conn, values["wmo_index"]) if self.table is rp5_readings else None
             conn.execute(self.table.insert().values(**values))
-            mark_pending(conn, values["wmo_index"], [values["obs_date"]])
-        recompute_range(self.engine, values["wmo_index"], values["obs_date"], values["obs_date"])
+            mark_pending(conn, values["wmo_index"], [values["obs_date"]], parameters=self._row_dependencies(values))
+            self._mark_series_change(conn, values["wmo_index"], old_series)
+        self._run_recomputation(values["wmo_index"])
         if self.loaded:
             self.reload()
 
     def delete_row(self, row_index: int) -> None:
         row = self.rows[row_index]
         with self.engine.begin() as conn:
+            full_row = conn.execute(select(self.table).where(self.table.c.id == row["id"])).mappings().one()
+            from meteoregik.calculations.precipitation import main_series
+            old_series = main_series(conn, row["wmo_index"]) if self.table is rp5_readings else None
             conn.execute(delete(self.table).where(self.table.c.id == row["id"]))
-            mark_pending(conn, row["wmo_index"], [row["obs_date"]])
-        recompute_range(self.engine, row["wmo_index"], row["obs_date"], row["obs_date"])
+            mark_pending(conn, row["wmo_index"], [row["obs_date"]], parameters=self._row_dependencies(full_row))
+            self._mark_series_change(conn, row["wmo_index"], old_series)
+        self._run_recomputation(row["wmo_index"])
         self.reload()
+
+    @staticmethod
+    def _row_dependencies(values: Mapping[str, object]) -> int:
+        """Пустой добавленный срок не отменяет прежние температурные решения."""
+        from meteoregik.calculations.pending import FIELD_DEPENDENCIES, SNOW
+        mask = SNOW
+        for field, value in values.items():
+            if field not in {"obs_date", "obs_time"} and value is not None:
+                mask |= FIELD_DEPENDENCIES.get(field, 0)
+        return mask
 
 
 class _AddRowDialog(QDialog):
@@ -665,6 +732,8 @@ class DataBrowserDialog(QDialog):
         layout.addWidget(hint)
 
         self.table = QTableView()
+        self._model.setParent(self)
+        self._model.background_recompute = True
         self.table.setModel(self._model)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -810,6 +879,8 @@ class DataBrowserDialog(QDialog):
         self._model = ReadingsTableModel(
             self.engine, spec.table, spec.columns_for(self._selected_fields), spec.temp_columns
         )
+        self._model.setParent(self)
+        self._model.background_recompute = True
         self.table.setModel(self._model)
         self._reload_station_choices()
         self._refresh_fields_label()

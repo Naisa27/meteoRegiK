@@ -170,6 +170,7 @@ pending_recomputations = Table(
     Column("auto_accept", Boolean, nullable=False, server_default="0"),
     Column("periods_only", Boolean, nullable=False, server_default="0"),
     Column("missing_only", Boolean, nullable=False, server_default="0"),
+    Column("parameters", Integer, nullable=False, server_default="7"),
 )
 
 # --- сохранённый расчёт отклонений от нормы (миграция 6, calculations/anomalies.py) ---

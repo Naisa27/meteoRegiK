@@ -100,15 +100,15 @@ def suggest_export_filename(
 ) -> str:
     """Имя файла экспорта по умолчанию (правка 2026-09-25, п.4) — из того,
     что на экране: станция, вид и тип вывода, период. Например
-    "Мосальск (27704) — таблица, помесячно — 01.01.2020–31.12.2021.xlsx":
+    "Мосальск_(27704)_—_таблица,_помесячно_—_01.01.2020–31.12.2021.xlsx":
     по имени понятно, что внутри, и выгрузки разных станций/периодов в одной
     папке не перезаписывают друг друга. Недопустимые в именах файлов Windows
-    символы заменяются на "_"."""
+    символы и пробельные символы заменяются на "_"."""
     view = "таблица" if view_kind == "table" else "график"
     mode = _OUTPUT_MODE_LABELS[output_mode].lower()
     period = f"{date_from:%d.%m.%Y}–{date_to:%d.%m.%Y}"
     name = f"{station_name} ({wmo_index}) — {view}, {mode} — {period}"
-    return _FORBIDDEN_FILENAME_CHARS.sub("_", name) + ".xlsx"
+    return re.sub(r"\s", "_", _FORBIDDEN_FILENAME_CHARS.sub("_", name)) + ".xlsx"
 
 
 def _encode_param(key: ParamKey) -> str:

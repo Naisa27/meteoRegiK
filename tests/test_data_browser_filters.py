@@ -2,10 +2,12 @@
 по индексу ВМО, период (обе даты пусты или обе заполнены), выбор полей с
 запоминанием по форматам, формат/выравнивание ячеек, доступность кнопок."""
 
+import gc
+from collections.abc import Iterator
 from datetime import date, time, timedelta
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from sqlalchemy import Date, Time
 
@@ -27,8 +29,33 @@ from meteoregik.ui.data_browser import (
 WMO_INDEX = 27704
 
 
-def _qapp():
+def _qapp() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(scope="module", autouse=True)
+def qt_application() -> Iterator[QApplication]:
+    """Удерживать QApplication, пока приходят отложенные сигналы виджетов."""
+    app = _qapp()
+    yield app
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_widgets(qt_application: QApplication) -> Iterator[None]:
+    """Удалять окна теста в GUI-потоке до следующей фоновой задачи."""
+    existing = set(qt_application.topLevelWidgets())
+    yield
+    for widget in set(qt_application.topLevelWidgets()) - existing:
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
+
+
+def _finish_recomputations() -> None:
+    """Доставить результат фоновой работы до снятия перехватов QMessageBox."""
+    assert QThreadPool.globalInstance().waitForDone(10_000), "Фоновый пересчёт не завершился"
+    QApplication.processEvents()
 
 
 @pytest.fixture
@@ -543,8 +570,10 @@ def test_add_row_before_apply_does_not_load_table(tmp_path, messages, monkeypatc
 
     monkeypatch.setattr(data_browser, "_AddRowDialog", _FakeAddDialog)
     dialog.add_btn.click()
+    _finish_recomputations()
 
     assert dialog._model.rowCount() == 0
+    assert dialog.isEnabled()
     assert messages and messages[0][0] == "info"
     assert dialog.station_combo.findData(55555) >= 0  # новая станция появилась в списке
 
@@ -644,5 +673,7 @@ def test_no_data_hint_disappears_after_first_row_is_added(tmp_path, messages, mo
     monkeypatch.setattr(data_browser, "_AddRowDialog", _FakeAddDialog)
 
     dialog.add_btn.click()
+    _finish_recomputations()
 
     assert dialog._stack.currentWidget() is dialog.table
+    assert dialog.isEnabled()

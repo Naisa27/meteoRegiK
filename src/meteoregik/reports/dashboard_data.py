@@ -236,6 +236,8 @@ def station_day_bounds(engine: Engine, wmo_index: int) -> tuple[date, date] | No
 def build_dashboard(engine: Engine, wmo_index: int, date_from: date, date_to: date) -> DashboardData:
     """Нормы и полнота берутся сохранённые (calculations/anomalies.py); если
     данные станции менялись после последнего расчёта — сначала досчитываются."""
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    ensure_computed_fresh(engine, [wmo_index])
     ensure_fresh(engine, [wmo_index])
     days, months, years = fetch_station_temperatures(engine, wmo_index)
     return compute_dashboard(days, months, years, date_from, date_to, load_station_norms(engine, wmo_index))

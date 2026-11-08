@@ -106,6 +106,8 @@ def fetch_rows(
 ) -> Sequence[AggregateRow]:
     """Плоская выборка computed_indicators по станции/периоду/показателям/
     уровням агрегации — вход для group_detailed/group_monthly/group_yearly."""
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    ensure_computed_fresh(engine, [wmo_index])
     params = {p for p, _ in parameters}
     stats = {s for _, s in parameters}
     stmt = select(

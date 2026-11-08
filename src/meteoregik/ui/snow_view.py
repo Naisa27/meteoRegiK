@@ -211,7 +211,7 @@ class SnowDialog(QDialog):
     def _export(self) -> None:
         if self._data is None or not self._data.has_data:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт снежного покрова", "Снежный покров.xlsx", "Excel (*.xlsx)")
+        path, _ = QFileDialog.getSaveFileName(self, "Экспорт снежного покрова", "Снежный_покров.xlsx", "Excel (*.xlsx)")
         if not path:
             return
         if not path.lower().endswith(".xlsx"):

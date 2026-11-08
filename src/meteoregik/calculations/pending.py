@@ -15,6 +15,18 @@ from meteoregik.calculations import snow
 from meteoregik.calculations.temperature import decade_bounds
 from meteoregik.db.schema import computed_indicators, gg_readings, pending_recomputations, rp5_readings
 
+TEMPERATURE = 1
+PRECIPITATION = 2
+SNOW = 4
+ALL_PARAMETERS = TEMPERATURE | PRECIPITATION | SNOW
+FIELD_DEPENDENCIES = {
+    "T_temperature": TEMPERATURE, "t_avg": TEMPERATURE,
+    "t_min": TEMPERATURE, "t_max": TEMPERATURE,
+    "RRR_precipitation": PRECIPITATION, "tR_precipitation_period": PRECIPITATION,
+    "rrr_precipitation": PRECIPITATION, "sss_snow_depth": SNOW,
+    "obs_date": ALL_PARAMETERS, "obs_time": ALL_PARAMETERS,
+}
+
 
 @dataclass(frozen=True)
 class RecomputeRange:
@@ -31,15 +43,17 @@ class PendingDay:
     auto_accept: bool
     periods_only: bool
     missing_only: bool
+    parameters: int = 7
 
 
-def _invalidate(conn: Connection, wmo_index: int, days: list[date]) -> None:
+def _invalidate(conn: Connection, wmo_index: int, days: list[date], parameters: int = ALL_PARAMETERS) -> None:
     """Сбой до запуска расчёта не должен оставлять нормы ложно актуальными."""
     if days:
         from meteoregik.calculations.anomalies import mark_stale
         from meteoregik.calculations.transitions import mark_stale as mark_transitions_stale
         mark_stale(conn, wmo_index)
-        mark_transitions_stale(conn, wmo_index, min(days), max(days))
+        if parameters & TEMPERATURE:
+            mark_transitions_stale(conn, wmo_index, min(days), max(days))
 
 
 def _days(start: date, end: date) -> Iterable[date]:
@@ -49,11 +63,11 @@ def _days(start: date, end: date) -> Iterable[date]:
 
 def mark_pending(
     conn: Connection, wmo_index: int, days: Iterable[date], *,
-    auto_accept: bool = False, periods_only: bool = False,
+    auto_accept: bool = False, periods_only: bool = False, parameters: int = 7,
 ) -> None:
     """Вызывать в транзакции изменения наблюдений; последняя правка повышает ревизию."""
     rows = [{"wmo_index": wmo_index, "obs_date": day, "revision": 1,
-             "auto_accept": auto_accept, "periods_only": periods_only, "missing_only": False}
+             "auto_accept": auto_accept, "periods_only": periods_only, "missing_only": False, "parameters": parameters}
             for day in sorted(set(days))]
     if not rows:
         return
@@ -61,13 +75,14 @@ def mark_pending(
     stmt = insert(table)
     conn.execute(stmt.on_conflict_do_update(
         index_elements=[table.c.wmo_index, table.c.obs_date],
-        set_={"revision": table.c.revision + 1,
+        set_={"parameters": table.c.parameters.op("|")(stmt.excluded.parameters),
+              "revision": table.c.revision + 1,
               "auto_accept": case((stmt.excluded.periods_only, table.c.auto_accept),
                                   else_=stmt.excluded.auto_accept),
               "periods_only": table.c.periods_only & stmt.excluded.periods_only,
               "missing_only": case((stmt.excluded.periods_only, table.c.missing_only), else_=False)},
     ), rows)
-    _invalidate(conn, wmo_index, [row["obs_date"] for row in rows])
+    _invalidate(conn, wmo_index, [row["obs_date"] for row in rows], parameters)
 
 
 def mark_range(
@@ -103,7 +118,7 @@ def begin_recomputation(
 ) -> tuple[PendingDay, ...]:
     """Снимок берётся до работы, а очищается лишь после всех производных периодов."""
     _ensure_pending(conn, wmo_index, _days(start, end), periods_only=periods_only)
-    return tuple(PendingDay(row.obs_date, row.revision, row.auto_accept, row.periods_only, row.missing_only)
+    return tuple(PendingDay(row.obs_date, row.revision, row.auto_accept, row.periods_only, row.missing_only, row.parameters)
                  for row in conn.execute(select(pending_recomputations).where(
                      pending_recomputations.c.wmo_index == wmo_index,
                      pending_recomputations.c.obs_date.between(start, end),

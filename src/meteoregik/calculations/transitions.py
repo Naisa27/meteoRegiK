@@ -394,6 +394,10 @@ def ensure_fresh(
     wmo_indexes ограничивает круг станций; None — все, и тогда же убирается
     сохранённое по удалённым данным. progress(номер, всего, wmo_index) —
     перед расчётом каждой станции."""
+    from meteoregik.calculations.freshness import ensure_computed_fresh
+    if wmo_indexes is not None:
+        wmo_indexes = list(wmo_indexes)
+    ensure_computed_fresh(engine, wmo_indexes)
     if wmo_indexes is None:
         _purge_outdated(engine)
     todo = stale_stations(engine, wmo_indexes)

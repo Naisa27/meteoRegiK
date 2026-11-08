@@ -29,6 +29,8 @@
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -696,7 +698,7 @@ class TransitionsDialog(QDialog):
         if wmo is None:
             return
         name = self.station_combo.name_of(wmo) or str(wmo)
-        filename = _FORBIDDEN_FILENAME_CHARS.sub("_", f"{name} ({wmo}) — переходы температуры") + ".xlsx"
+        filename = re.sub(r"\s", "_", _FORBIDDEN_FILENAME_CHARS.sub("_", f"{name} ({wmo}) — переходы температуры")) + ".xlsx"
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт в Excel", str(self._export_dir() / filename),
                                               "Excel файлы (*.xlsx)")
         if not path:

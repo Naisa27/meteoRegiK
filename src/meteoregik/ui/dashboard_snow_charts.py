@@ -70,6 +70,12 @@ class SnowSeriesChart(_SnowCanvas):
         row.addWidget(self.window_label)
         self.layout().addWidget(self.scroll_row)
         self.scroll_row.hide()
+        self.scroll_note = QLabel("Полоса прокрутки открывает весь архив. "
+                                 "Колесо прокручивает страницу, Shift + колесо — график по времени.")
+        self.scroll_note.setWordWrap(True)
+        self.scroll_note.setObjectName("chartNote")
+        self.layout().addWidget(self.scroll_note)
+        self.scroll_note.hide()
 
     def plot(self, periods: tuple[SnowPeriod, ...]) -> None:
         self.periods = periods
@@ -78,6 +84,7 @@ class SnowSeriesChart(_SnowCanvas):
         if not periods:
             self._show_message(ax, "За выбранный период данных нет.")
             self.scroll_row.hide()
+            self.scroll_note.hide()
             self.canvas.draw_idle()
             return
         positions = list(range(len(periods)))
@@ -121,6 +128,7 @@ class SnowSeriesChart(_SnowCanvas):
         self.scrollbar.setValue(self.scrollbar.maximum())
         self.scrollbar.blockSignals(False)
         self.scroll_row.setVisible(self.scrollbar.maximum() > 0)
+        self.scroll_note.setVisible(self.scrollbar.maximum() > 0)
         self._scroll(self.scrollbar.value())
 
     def _label(self, period: SnowPeriod) -> str:
@@ -238,3 +246,89 @@ class SnowHeatmap(_SnowCanvas):
                 f"Норма: {norm}\nОтклонение: {anomaly}\n{cell.base_text}\n"
                 + ("Полный период." if cell.complete else "Доступная часть периода.")
                 + "\nПропуски высоты внутри rp5-архива приняты за 0.")
+
+
+class SnowComparisonChart(SnowSeriesChart):
+    """Отклонения снежных дней или месячные максимумы относительно среднего."""
+
+    def __init__(self, parent: QWidget | None = None, *, maximum: bool = False) -> None:
+        super().__init__(parent, height=maximum)
+        self.maximum = maximum
+        self.norms: tuple[float | None, ...] = ()
+        self.bases: tuple[str, ...] = ()
+
+    def plot_comparison(self, periods: tuple[SnowPeriod, ...], norms: tuple[float | None, ...],
+                        bases: tuple[str, ...], *, seasonal: bool = False) -> None:
+        self.seasonal = seasonal
+        self.periods, self.norms, self.bases = periods, norms, bases
+        self.figure.clear()
+        ax = self._ax = self.figure.add_subplot(111)
+        if not periods:
+            self._show_message(ax, "За выбранный месяц данных нет.")
+            self.scroll_row.hide()
+            self.scroll_note.hide()
+            self.canvas.draw_idle()
+            return
+        for index, period in enumerate(periods):
+            normal = norms[index]
+            if self.maximum:
+                value = period.max_depth
+            elif period.partial or normal is None:
+                ax.scatter(index, 0, facecolors="none", edgecolors=theme.TEXT_SECONDARY, marker="D")
+                continue
+            else:
+                value = period.snow_days - normal
+            ax.bar(index, value, color=theme.ACCENT_SKY if value >= 0 else theme.ACCENT,
+                   hatch="////" if period.partial else None)
+        if self.maximum and norms and norms[0] is not None:
+            ax.axhline(norms[0], color=theme.ACCENT, linestyle="--", label=f"Среднее: {norms[0]:.1f} см")
+            self.figure.legend(loc="upper center", bbox_to_anchor=(.55, 1),
+                               frameon=False, fontsize=10, labelcolor=theme.TEXT_PRIMARY)
+        if not self.maximum:
+            ax.axhline(0, color=theme.TEXT_SECONDARY, linewidth=.8)
+        ax.set_ylabel("Высота, см" if self.maximum else "Отклонение, дни", color=theme.TEXT_SECONDARY)
+        _style_axes(ax)
+        ax.grid(axis="y", color=theme.BORDER, alpha=.6)
+        ax.set_axisbelow(True)
+        self.figure.subplots_adjust(left=.14, right=.98, top=.88 if self.maximum else .94, bottom=.25)
+        window = 20 if seasonal or self.maximum else 60
+        self.scrollbar.blockSignals(True)
+        self.scrollbar.setRange(0, max(0, len(periods) - window))
+        self.scrollbar.setPageStep(window)
+        self.scrollbar.setValue(self.scrollbar.maximum())
+        self.scrollbar.blockSignals(False)
+        self.scroll_row.setVisible(self.scrollbar.maximum() > 0)
+        self.scroll_note.setVisible(self.scrollbar.maximum() > 0)
+        self._scroll(self.scrollbar.value())
+
+    def _label(self, period: SnowPeriod) -> str:
+        return str(period.start.year) if self.maximum else super()._label(period)
+
+    def _scroll(self, position: int) -> None:
+        if self._ax is None or not self.periods:
+            return
+        window = 20 if self.seasonal or self.maximum else 60
+        end = min(len(self.periods), position + window)
+        self._ax.set_xlim(position - .7, end - .3)
+        step = max(1, (end - position + 11) // 12)
+        ticks = list(range(position, end, step))
+        self._ax.set_xticks(ticks, [self._label(self.periods[x]) for x in ticks], rotation=45, ha="right")
+        self.window_label.setText(f"{self._label(self.periods[position])}–{self._label(self.periods[end - 1])}")
+        self.canvas.draw_idle()
+
+    def tooltip_at(self, event: MouseEvent) -> str | None:
+        text = super().tooltip_at(event)
+        if text is None or event.xdata is None:
+            return text
+        index = round(event.xdata)
+        normal = self.norms[index] if index < len(self.norms) else None
+        period = self.periods[index]
+        unit = "см" if self.maximum else "дн."
+        label = "Средний максимум" if self.maximum else "Норма"
+        value = period.max_depth if self.maximum else period.snow_days
+        comparison = (f"{label}: {normal:.1f} {unit}" if normal is not None else f"{label}: не рассчитана")
+        if normal is not None and not period.partial:
+            comparison += f"\nОтклонение: {value - normal:+.1f} {unit}"
+        elif period.partial:
+            comparison += "\nНеполный период: с полной нормой не сравнивается."
+        return text + "\n" + comparison + "\n" + (self.bases[index] if index < len(self.bases) else "")

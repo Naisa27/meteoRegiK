@@ -486,7 +486,7 @@ def test_export_suggests_descriptive_filename_in_downloads(tmp_path, monkeypatch
     monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_save)
     dialog.export_btn.click()
 
-    assert Path(proposed[0]).name == "Мосальск (27704) — таблица, помесячно — 01.01.2020–31.12.2021.xlsx"
+    assert Path(proposed[0]).name == "Мосальск_(27704)_—_таблица,_помесячно_—_01.01.2020–31.12.2021.xlsx"
     downloads = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
     assert Path(proposed[0]).parent == Path(downloads)  # по умолчанию — "Загрузки"
 
@@ -520,7 +520,7 @@ def test_export_remembers_folder_for_next_time(tmp_path, monkeypatch, messages):
     ],
 )
 def test_suggest_export_filename(station, view, mode, expected):
-    assert suggest_export_filename(station, 27704, view, mode, date(2020, 1, 1), date(2021, 12, 31)) == expected
+    assert suggest_export_filename(station, 27704, view, mode, date(2020, 1, 1), date(2021, 12, 31)) == expected.replace(" ", "_")
 
 
 def test_dialog_has_minimize_and_maximize_buttons(tmp_path):
